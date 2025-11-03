@@ -6,7 +6,7 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "prepare": "husky",
-    "commit": "cz"
+    "commit": "npx git-cz"
   },
   "repository": {
     "type": "git",
@@ -27,5 +27,10 @@
     "cz-conventional-changelog": "^3.3.0",
     "husky": "^9.1.7",
     "release-please": "^17.1.3"
+  },
+  "config": {
+    "commitizen": {
+      "path": "cz-conventional-changelog"
+    }
   }
 }
