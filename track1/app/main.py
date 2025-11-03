@@ -183,19 +183,25 @@ async def create_user(user: UserCreate):
 
 @app.post("/calls/outbound", response_model=OutboundCallResponse)
 async def create_outbound_call(call_request: OutboundCallRequest):
-    """Initiate an outbound call"""
-    try:
-        # Verify user exists
-        user = db.get_user(call_request.user_id)
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
+    """Initiate an outbound call
 
+    Args:
+        call_request: Request containing:
+            - to: Destination phone number
+            - user_external_id: External user identifier
+            - script: Optional script/message for the call
+            - recording_enabled: Whether to record the call (default: True)
+
+    Returns:
+        OutboundCallResponse with call_sid and other call details
+    """
+    try:
         # Generate unique call ID
         call_id = str(uuid.uuid4())
 
         # Initiate Twilio call
         twilio_response = twilio_client.make_outbound_call(
-            to_number=call_request.to_number,
+            to_number=call_request.to,
             call_id=call_id,
             script=call_request.script,
             recording_enabled=call_request.recording_enabled,
@@ -204,8 +210,8 @@ async def create_outbound_call(call_request: OutboundCallRequest):
         # Store call record in database
         call_data = {
             "call_id": call_id,
-            "user_id": call_request.user_id,
-            "to_number": call_request.to_number,
+            "user_external_id": call_request.user_external_id,
+            "to_number": call_request.to,
             "from_number": twilio_client.from_number,
             "status": "initiated",
             "script": call_request.script,
@@ -217,8 +223,6 @@ async def create_outbound_call(call_request: OutboundCallRequest):
         call_record = db.get_call(db_call_id)
 
         return OutboundCallResponse(**call_record)
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error(f"Failed to create outbound call: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
