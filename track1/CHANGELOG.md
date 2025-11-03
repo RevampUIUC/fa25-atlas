@@ -1,5 +1,41 @@
 # Changelog - Atlas Twilio Call Management API
 
+## [1.1.0] - 2025-11-02 - Twilio Integration Update
+
+### 🚀 Updates
+
+#### POST /calls/outbound Endpoint Enhancement
+- **Changed request body parameters:**
+  - `user_id` → `user_external_id` (external user identifier field)
+  - `to_number` → `to` (destination phone number field)
+- **Removed user validation** - Endpoint no longer requires user to exist in database
+- **Simplified workflow** - Direct call initiation without user lookup
+- **Updated Twilio credentials** - Configured with actual Account SID and Auth Token
+- **Returned call_sid** - Response includes Twilio call SID for tracking
+
+**Request Example:**
+```json
+POST /calls/outbound
+{
+  "to": "+14155552671",
+  "user_external_id": "user_123"
+}
+```
+
+**Response Example:**
+```json
+{
+  "call_id": "550e8400-e29b-41d4-a716-446655440000",
+  "user_external_id": "user_123",
+  "to_number": "+14155552671",
+  "status": "initiated",
+  "twilio_sid": "CA1234567890abcdef1234567890abcdef",
+  "created_at": "2025-11-02T15:30:45.123456"
+}
+```
+
+---
+
 ## [1.0.0] - 2025-11-02 - Initial Release
 
 ### 📦 Project Initialization
