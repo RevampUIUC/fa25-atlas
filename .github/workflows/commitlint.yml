@@ -2,6 +2,8 @@ name: commitlint
 on:
   pull_request:
     branches: [ main ]
+  push:
+    branches: [ "**" ]   # run on all branches
 jobs:
   lint:
     runs-on: ubuntu-latest
