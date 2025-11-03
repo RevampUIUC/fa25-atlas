@@ -40,8 +40,8 @@ class User(UserBase):
 
 
 class OutboundCallRequest(BaseModel):
-    user_id: str = Field(..., min_length=1)
-    to_number: str = Field(..., min_length=10, max_length=15)
+    to: str = Field(..., min_length=10, max_length=15, description="Destination phone number")
+    user_external_id: str = Field(..., min_length=1, description="External user identifier")
     script: Optional[str] = Field(None, max_length=5000)
     recording_enabled: bool = Field(default=True)
 
