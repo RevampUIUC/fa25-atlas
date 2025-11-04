@@ -18,6 +18,8 @@ from app.models import (
     HealthResponse,
     ErrorResponse,
     CallListResponse,
+    CallFeedbackRequest,
+    CallFeedbackResponse,
 )
 from app.dao import MongoDatabase
 from app.twilio_client import TwilioClient
@@ -247,6 +249,199 @@ async def list_user_calls(
     except Exception as e:
         logger.error(f"Failed to list user calls: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# Call Feedback Endpoints
+# ============================================================================
+
+
+@app.patch("/calls/{call_sid}/feedback", response_model=CallFeedbackResponse)
+async def submit_call_feedback(call_sid: str, feedback: CallFeedbackRequest):
+    """
+    Submit feedback for a call
+
+    Args:
+        call_sid: Twilio Call SID
+        feedback: Feedback request with five scoring fields and optional notes
+
+    Returns:
+        CallFeedbackResponse with submitted feedback
+
+    Raises:
+        404: Call not found
+        400: Invalid feedback data
+        500: Database or server error
+    """
+    try:
+        # Validate call_sid format
+        if not call_sid or not isinstance(call_sid, str) or len(call_sid.strip()) == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid call_sid: must be a non-empty string"
+            )
+
+        # Verify call exists
+        logger.info(f"Attempting to submit feedback for call: {call_sid}")
+        call = db.get_call_by_twilio_sid(call_sid)
+        if not call:
+            logger.warning(f"Call not found: {call_sid}")
+            raise HTTPException(status_code=404, detail=f"Call not found: {call_sid}")
+
+        # Validate feedback data
+        feedback_data = feedback.dict()
+
+        # Additional validation for scores
+        scores = {
+            "call_quality": feedback_data.get("call_quality"),
+            "agent_helpfulness": feedback_data.get("agent_helpfulness"),
+            "resolution": feedback_data.get("resolution"),
+            "call_ease": feedback_data.get("call_ease"),
+            "overall_satisfaction": feedback_data.get("overall_satisfaction"),
+        }
+
+        for field_name, score in scores.items():
+            if score is None or not isinstance(score, int) or score < 1 or score > 5:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid {field_name}: must be an integer between 1 and 5"
+                )
+
+        # Validate notes if provided
+        notes = feedback_data.get("notes")
+        if notes is not None:
+            if not isinstance(notes, str):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid notes: must be a string"
+                )
+            if len(notes) > 2000:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid notes: must not exceed 2000 characters"
+                )
+
+        # Save feedback to database
+        logger.info(f"Saving feedback for call: {call_sid}")
+        try:
+            success = db.save_feedback(call_sid=call_sid, feedback_data=feedback_data)
+        except Exception as db_error:
+            logger.error(f"Database error while saving feedback: {str(db_error)}")
+            raise HTTPException(
+                status_code=500,
+                detail="Database error: failed to save feedback"
+            )
+
+        if not success:
+            logger.error(f"Failed to save feedback for call: {call_sid}")
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to save feedback: call update returned no match"
+            )
+
+        # Retrieve and return saved feedback
+        try:
+            saved_feedback = db.get_call_feedback(call_sid)
+        except Exception as db_error:
+            logger.error(f"Database error while retrieving feedback: {str(db_error)}")
+            raise HTTPException(
+                status_code=500,
+                detail="Database error: feedback saved but could not be retrieved"
+            )
+
+        if not saved_feedback:
+            logger.error(f"Feedback not found after save for call: {call_sid}")
+            raise HTTPException(
+                status_code=500,
+                detail="Feedback saved but could not be retrieved"
+            )
+
+        logger.info(f"Feedback successfully submitted for call: {call_sid}")
+        return CallFeedbackResponse(**saved_feedback)
+
+    except HTTPException:
+        raise
+    except ValueError as val_error:
+        logger.error(f"Validation error: {str(val_error)}")
+        raise HTTPException(status_code=400, detail=f"Validation error: {str(val_error)}")
+    except Exception as e:
+        logger.error(f"Unexpected error while submitting feedback for call {call_sid}: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error: unexpected error occurred"
+        )
+
+
+@app.get("/calls/{call_sid}/feedback", response_model=CallFeedbackResponse)
+async def get_call_feedback(call_sid: str):
+    """
+    Get feedback for a specific call
+
+    Args:
+        call_sid: Twilio Call SID
+
+    Returns:
+        CallFeedbackResponse if feedback exists, 404 if not
+
+    Raises:
+        404: Call not found or no feedback for call
+        500: Database or server error
+    """
+    try:
+        # Validate call_sid format
+        if not call_sid or not isinstance(call_sid, str) or len(call_sid.strip()) == 0:
+            logger.warning("Invalid call_sid provided for feedback retrieval")
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid call_sid: must be a non-empty string"
+            )
+
+        # Verify call exists
+        logger.info(f"Attempting to retrieve feedback for call: {call_sid}")
+        try:
+            call = db.get_call_by_twilio_sid(call_sid)
+        except Exception as db_error:
+            logger.error(f"Database error while looking up call: {str(db_error)}")
+            raise HTTPException(
+                status_code=500,
+                detail="Database error: failed to look up call"
+            )
+
+        if not call:
+            logger.warning(f"Call not found: {call_sid}")
+            raise HTTPException(status_code=404, detail=f"Call not found: {call_sid}")
+
+        # Get feedback
+        try:
+            feedback = db.get_call_feedback(call_sid)
+        except Exception as db_error:
+            logger.error(f"Database error while retrieving feedback: {str(db_error)}")
+            raise HTTPException(
+                status_code=500,
+                detail="Database error: failed to retrieve feedback"
+            )
+
+        if not feedback:
+            logger.info(f"No feedback found for call: {call_sid}")
+            raise HTTPException(
+                status_code=404,
+                detail=f"No feedback found for call: {call_sid}"
+            )
+
+        logger.info(f"Feedback successfully retrieved for call: {call_sid}")
+        return CallFeedbackResponse(**feedback)
+
+    except HTTPException:
+        raise
+    except ValueError as val_error:
+        logger.error(f"Validation error: {str(val_error)}")
+        raise HTTPException(status_code=400, detail=f"Validation error: {str(val_error)}")
+    except Exception as e:
+        logger.error(f"Unexpected error while retrieving feedback for call {call_sid}: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error: unexpected error occurred"
+        )
 
 
 # ============================================================================

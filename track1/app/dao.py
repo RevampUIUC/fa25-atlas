@@ -521,3 +521,58 @@ class MongoDatabase:
         res = self.db.transcripts.insert_one(doc)
         return str(res.inserted_id)
 
+    # Feedback operations
+    def save_feedback(self, call_sid: str, feedback_data: Dict[str, Any]) -> bool:
+        """
+        Save call feedback to the calls collection
+
+        Args:
+            call_sid: Twilio Call SID
+            feedback_data: Feedback data with scoring fields
+
+        Returns:
+            True if successful
+        """
+        try:
+            feedback = {
+                "call_quality": feedback_data.get("call_quality"),
+                "agent_helpfulness": feedback_data.get("agent_helpfulness"),
+                "resolution": feedback_data.get("resolution"),
+                "call_ease": feedback_data.get("call_ease"),
+                "overall_satisfaction": feedback_data.get("overall_satisfaction"),
+                "notes": feedback_data.get("notes"),
+                "feedback_provided_at": datetime.utcnow(),
+            }
+
+            result = self.db.calls.update_one(
+                {"call_sid": call_sid},
+                {"$set": {"feedback": feedback, "updated_at": datetime.utcnow()}},
+                upsert=False
+            )
+            return result.matched_count > 0
+        except Exception as e:
+            logger.error(f"Failed to save feedback for call {call_sid}: {str(e)}")
+            raise
+
+    def get_call_feedback(self, call_sid: str) -> Optional[Dict[str, Any]]:
+        """
+        Get feedback for a specific call
+
+        Args:
+            call_sid: Twilio Call SID
+
+        Returns:
+            Feedback data or None
+        """
+        try:
+            call = self.db.calls.find_one({"call_sid": call_sid})
+            if call and "feedback" in call:
+                feedback = call["feedback"]
+                feedback["call_sid"] = call_sid
+                feedback["created_at"] = feedback.get("feedback_provided_at", datetime.utcnow())
+                return feedback
+            return None
+        except Exception as e:
+            logger.error(f"Failed to get feedback for call {call_sid}: {str(e)}")
+            return None
+
