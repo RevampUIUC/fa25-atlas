@@ -63,6 +63,7 @@ async def startup_event():
             connection_string=os.getenv("MONGO_URI"),
             database_name=os.getenv("MONGO_DB", "atlas"),
         )
+        db.ensure_track1_indexes()
         logger.info("Database initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize database: {str(e)}")
@@ -297,6 +298,7 @@ async def handle_status_callback(
     ApiVersion: str = None,
     AccountSid: str = None,
     Timestamp: str = None,
+    CallDuration: Optional[int] = None,
 ):
     """
     Handle call status updates from Twilio
@@ -329,6 +331,24 @@ async def handle_status_callback(
             update_data["direction"] = Direction
 
         db.update_call_by_twilio_sid(CallSid, update_data)
+        # NEW: also set duration/ended_at via Track-1 contract
+        ended_at = (
+            datetime.utcnow()
+            if CallStatus in ("completed", "failed", "busy", "no-answer")
+            else None
+        )
+        # this won’t break anything; it upserts by call_sid if needed
+        db.update_call_status(
+            call_sid=CallSid,
+            status=status,
+            duration_sec=CallDuration,
+            ended_at=ended_at,
+            meta={"raw": {
+                "To": To, "From": From, "Direction": Direction,
+                "ApiVersion": ApiVersion, "AccountSid": AccountSid,
+                "Timestamp": Timestamp, "CallStatus": CallStatus
+            }},
+        )
 
         logger.info(f"Call {CallSid} status updated to {status}")
         return {"status": "ok"}
@@ -345,6 +365,7 @@ async def handle_recording_callback(
     CallSid: str,
     AccountSid: str = None,
     ApiVersion: str = None,
+    TranscriptionText: Optional[str] = None,
 ):
     """
     Handle recording completion webhooks from Twilio
@@ -381,6 +402,12 @@ async def handle_recording_callback(
         # Update call with recording URL
         if RecordingStatus == "completed":
             db.update_call(call.get("id"), {"recording_url": RecordingUrl})
+
+        db.save_recording(
+            call_sid=CallSid,
+            recording_url=RecordingUrl,
+            transcription_text=TranscriptionText,
+        )
 
         logger.info(f"Recording {RecordingSid} processed successfully")
         return {"status": "ok"}
