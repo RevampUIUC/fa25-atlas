@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.log
+
+# Environments
+venv/
+ENV/
+env/
+.venv/
+
+# VS Code
+.vscode/
+
+# Environment Variables
+.env
+.env.*
+
+# Dependency files, if any
+*.db
+*.sqlite3
+
+# OS / Editor junk
+.DS_Store
+Thumbs.db
+
+# Husky, if custom hooks (add this if you use husky hooks)
+.husky/
