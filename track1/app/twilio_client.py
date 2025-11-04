@@ -112,7 +112,7 @@ class TwilioClient:
         record_call: bool = True,
     ) -> str:
         """
-        Generate TwiML response for voice calls
+        Generate TwiML response for voice calls with consent message
 
         Args:
             script: Text to speak (speech synthesis)
@@ -123,21 +123,35 @@ class TwilioClient:
         """
         response = VoiceResponse()
 
-        if record_call:
-            response.record(
-                max_speech_time=3600,
-                speech_timeout=5,
-                trim="trim-silence",
-                recording_status_callback=f"{self.base_url}/twilio/recording",
-                recording_status_callback_method="POST",
-            )
+        # Client-approved consent message
+        consent_message = (
+            "This call may be recorded for quality assurance and training purposes. "
+            "By remaining on the line, you consent to this recording. "
+            "If you do not consent, please hang up now."
+        )
 
+        # Say greeting with consent disclosure
+        response.say(consent_message, voice="alice")
+
+        # Add custom script if provided
         if script:
             response.say(script, voice="alice")
         else:
             response.say(
                 "Thank you for answering. Please leave a message after the beep.",
                 voice="alice",
+            )
+
+        # Record the call with transcription callback
+        if record_call:
+            response.record(
+                max_speech_time=3600,
+                speech_timeout=5,
+                trim="trim-silence",
+                transcribe="true",
+                transcribe_callback=f"{self.base_url}/twilio/recording",
+                recording_status_callback=f"{self.base_url}/twilio/recording",
+                recording_status_callback_method="POST",
             )
 
         response.hangup()
