@@ -51,6 +51,8 @@ class MongoDatabase:
                 self.db.calls.create_index([("twilio_sid", ASCENDING)], unique=True)
                 self.db.calls.create_index([("created_at", DESCENDING)])
                 self.db.calls.create_index([("status", ASCENDING)])
+                self.db.calls.create_index([("attempt_count", ASCENDING)])
+                self.db.calls.create_index([("updated_at", DESCENDING)])
 
             # Recordings collection indexes
             if "recordings" in self.db.list_collection_names():
@@ -521,58 +523,82 @@ class MongoDatabase:
         res = self.db.transcripts.insert_one(doc)
         return str(res.inserted_id)
 
-    # Feedback operations
-    def save_feedback(self, call_sid: str, feedback_data: Dict[str, Any]) -> bool:
+    def init_retry_plan(self, twilio_sid: str, retry_limit: int, retry_delay_sec: int) -> bool:
         """
-        Save call feedback to the calls collection
-
-        Args:
-            call_sid: Twilio Call SID
-            feedback_data: Feedback data with scoring fields
-
-        Returns:
-            True if successful
+        Ensure call doc has retry fields initialized.
         """
         try:
-            feedback = {
-                "call_quality": feedback_data.get("call_quality"),
-                "agent_helpfulness": feedback_data.get("agent_helpfulness"),
-                "resolution": feedback_data.get("resolution"),
-                "call_ease": feedback_data.get("call_ease"),
-                "overall_satisfaction": feedback_data.get("overall_satisfaction"),
-                "notes": feedback_data.get("notes"),
-                "feedback_provided_at": datetime.utcnow(),
-            }
-
-            result = self.db.calls.update_one(
-                {"call_sid": call_sid},
-                {"$set": {"feedback": feedback, "updated_at": datetime.utcnow()}},
-                upsert=False
+            now = datetime.utcnow()
+            res = self.db.calls.update_one(
+                {"twilio_sid": twilio_sid},
+                {"$setOnInsert": {"attempts": []}},
+                upsert=False,
             )
-            return result.matched_count > 0
+            # Always ensure the scalar fields exist
+            self.db.calls.update_one(
+                {"twilio_sid": twilio_sid},
+                {
+                    "$set": {
+                        "retry_limit": retry_limit,
+                        "retry_delay_sec": retry_delay_sec,
+                        "attempt_count": {"$ifNull": ["$attempt_count", 0]},
+                        "updated_at": now,
+                    }
+                },
+                upsert=False,
+            )
+            # Fallback if $ifNull is not available in update (older servers)
+            self.db.calls.update_one(
+                {"twilio_sid": twilio_sid, "attempt_count": {"$exists": False}},
+                {"$set": {"attempt_count": 0, "updated_at": now}},
+            )
+            return True
         except Exception as e:
-            logger.error(f"Failed to save feedback for call {call_sid}: {str(e)}")
-            raise
+            logger.error(f"init_retry_plan failed for {twilio_sid}: {e}")
+            return False
 
-    def get_call_feedback(self, call_sid: str) -> Optional[Dict[str, Any]]:
+
+    def log_call_attempt(
+        self,
+        twilio_sid: str,
+        attempt_no: int,
+        status: str,
+        reason: Optional[str] = None,
+        at: Optional[datetime] = None,
+    ) -> bool:
         """
-        Get feedback for a specific call
-
-        Args:
-            call_sid: Twilio Call SID
-
-        Returns:
-            Feedback data or None
+        Append an attempt record and bump attempt_count.
         """
         try:
-            call = self.db.calls.find_one({"call_sid": call_sid})
-            if call and "feedback" in call:
-                feedback = call["feedback"]
-                feedback["call_sid"] = call_sid
-                feedback["created_at"] = feedback.get("feedback_provided_at", datetime.utcnow())
-                return feedback
-            return None
+            at = at or datetime.utcnow()
+            update = {
+                "$push": {"attempts": {
+                    "attempt_no": attempt_no,
+                    "status": status,
+                    "reason": reason,
+                    "at": at,
+                }},
+                "$set": {"status": status, "updated_at": at},
+                "$inc": {"attempt_count": 1},
+            }
+            res = self.db.calls.update_one({"twilio_sid": twilio_sid}, update)
+            return res.modified_count > 0
         except Exception as e:
-            logger.error(f"Failed to get feedback for call {call_sid}: {str(e)}")
-            return None
+            logger.error(f"log_call_attempt failed for {twilio_sid}: {e}")
+            return False
 
+
+    def get_call_attempts(self, twilio_sid: str) -> List[Dict[str, Any]]:
+        """
+        Return attempts[] for a call (sorted by attempt_no).
+        """
+        try:
+            doc = self.db.calls.find_one(
+                {"twilio_sid": twilio_sid},
+                {"attempts": 1, "_id": 0}
+            )
+            attempts = (doc or {}).get("attempts", [])
+            return sorted(attempts, key=lambda x: x.get("attempt_no", 0))
+        except Exception as e:
+            logger.error(f"get_call_attempts failed for {twilio_sid}: {e}")
+            return []
