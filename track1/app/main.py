@@ -2,8 +2,8 @@ import os
 import logging
 from datetime import datetime
 from typing import Optional
-from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
-from fastapi.responses import Response
+from fastapi import FastAPI, HTTPException, Query, BackgroundTasks, Request
+from fastapi.responses import Response, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 import uuid
@@ -25,7 +25,15 @@ from app.models import (
     CallRetryResponse,
 )
 from app.dao import MongoDatabase
-from app.twilio_client import TwilioClient
+from app.twilio_client import (
+    TwilioClient,
+    TwilioError,
+    TwilioValidationError,
+    TwilioRateLimitError,
+    TwilioAuthenticationError,
+    TwilioPermissionError,
+    TwilioResourceError,
+)
 
 # Load environment variables
 load_dotenv()
@@ -200,6 +208,13 @@ async def create_outbound_call(call_request: OutboundCallRequest):
 
     Returns:
         OutboundCallResponse with call_sid and other call details
+
+    Raises:
+        400: Invalid phone number or request parameters
+        429: Rate limit exceeded
+        401: Authentication failed
+        403: Permission denied
+        500: Internal server error
     """
     try:
         # Generate unique call ID
@@ -229,9 +244,67 @@ async def create_outbound_call(call_request: OutboundCallRequest):
         call_record = db.get_call(db_call_id)
 
         return OutboundCallResponse(**call_record)
+
+    except TwilioValidationError as e:
+        logger.error(f"Validation error creating outbound call: {e.message} (Twilio code: {e.twilio_code})")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Invalid request parameters",
+                "message": e.message,
+                "twilio_code": e.twilio_code
+            }
+        )
+    except TwilioRateLimitError as e:
+        logger.error(f"Rate limit error creating outbound call: {e.message} (Twilio code: {e.twilio_code})")
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error": "Rate limit exceeded",
+                "message": e.message,
+                "twilio_code": e.twilio_code,
+                "retry_after": "Please try again later"
+            }
+        )
+    except TwilioAuthenticationError as e:
+        logger.error(f"Authentication error creating outbound call: {e.message} (Twilio code: {e.twilio_code})")
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "Authentication failed",
+                "message": "Twilio authentication failed. Please check server configuration.",
+                "twilio_code": e.twilio_code
+            }
+        )
+    except TwilioPermissionError as e:
+        logger.error(f"Permission error creating outbound call: {e.message} (Twilio code: {e.twilio_code})")
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Permission denied",
+                "message": e.message,
+                "twilio_code": e.twilio_code
+            }
+        )
+    except TwilioError as e:
+        logger.error(f"Twilio error creating outbound call: {e.message} (Twilio code: {e.twilio_code})")
+        raise HTTPException(
+            status_code=e.status_code,
+            detail={
+                "error": "Twilio service error",
+                "message": e.message,
+                "twilio_code": e.twilio_code
+            }
+        )
     except Exception as e:
         logger.error(f"Failed to create outbound call: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "Internal server error",
+                "message": "An unexpected error occurred while creating the call"
+            }
+        )
 
 
 @app.get("/users/{user_id}/calls", response_model=CallListResponse)
@@ -895,6 +968,97 @@ async def retry_failed_calls(retry_request: CallRetryRequest):
 # ============================================================================
 # Error Handlers
 # ============================================================================
+
+
+@app.exception_handler(TwilioValidationError)
+async def twilio_validation_error_handler(request: Request, exc: TwilioValidationError):
+    """Handle Twilio validation errors (invalid phone numbers, etc.)"""
+    logger.error(f"Twilio validation error: {exc.message} (code: {exc.twilio_code})")
+    return JSONResponse(
+        status_code=400,
+        content={
+            "error": "Invalid request parameters",
+            "message": exc.message,
+            "twilio_code": exc.twilio_code,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+    )
+
+
+@app.exception_handler(TwilioRateLimitError)
+async def twilio_rate_limit_error_handler(request: Request, exc: TwilioRateLimitError):
+    """Handle Twilio rate limit errors"""
+    logger.error(f"Twilio rate limit error: {exc.message} (code: {exc.twilio_code})")
+    return JSONResponse(
+        status_code=429,
+        content={
+            "error": "Rate limit exceeded",
+            "message": exc.message,
+            "twilio_code": exc.twilio_code,
+            "retry_after": "Please try again later",
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+    )
+
+
+@app.exception_handler(TwilioAuthenticationError)
+async def twilio_auth_error_handler(request: Request, exc: TwilioAuthenticationError):
+    """Handle Twilio authentication errors"""
+    logger.error(f"Twilio authentication error: {exc.message} (code: {exc.twilio_code})")
+    return JSONResponse(
+        status_code=401,
+        content={
+            "error": "Authentication failed",
+            "message": "Twilio service authentication failed. Please contact support.",
+            "twilio_code": exc.twilio_code,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+    )
+
+
+@app.exception_handler(TwilioPermissionError)
+async def twilio_permission_error_handler(request: Request, exc: TwilioPermissionError):
+    """Handle Twilio permission errors"""
+    logger.error(f"Twilio permission error: {exc.message} (code: {exc.twilio_code})")
+    return JSONResponse(
+        status_code=403,
+        content={
+            "error": "Permission denied",
+            "message": exc.message,
+            "twilio_code": exc.twilio_code,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+    )
+
+
+@app.exception_handler(TwilioResourceError)
+async def twilio_resource_error_handler(request: Request, exc: TwilioResourceError):
+    """Handle Twilio resource not found errors"""
+    logger.error(f"Twilio resource error: {exc.message} (code: {exc.twilio_code})")
+    return JSONResponse(
+        status_code=404,
+        content={
+            "error": "Resource not found",
+            "message": exc.message,
+            "twilio_code": exc.twilio_code,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+    )
+
+
+@app.exception_handler(TwilioError)
+async def twilio_error_handler(request: Request, exc: TwilioError):
+    """Handle general Twilio errors"""
+    logger.error(f"Twilio error: {exc.message} (code: {exc.twilio_code})")
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": "Twilio service error",
+            "message": exc.message,
+            "twilio_code": exc.twilio_code,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+    )
 
 
 @app.exception_handler(HTTPException)
