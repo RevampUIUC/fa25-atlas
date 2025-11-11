@@ -2,8 +2,8 @@ import os
 import logging
 from datetime import datetime
 from typing import Optional
-from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
-from fastapi.responses import Response
+from fastapi import FastAPI, HTTPException, Query, BackgroundTasks, Request
+from fastapi.responses import Response, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 import uuid
@@ -22,7 +22,15 @@ from app.models import (
     CallFeedbackResponse,
 )
 from app.dao import MongoDatabase
-from app.twilio_client import TwilioClient
+from app.twilio_client import (
+    TwilioClient,
+    TwilioError,
+    TwilioValidationError,
+    TwilioRateLimitError,
+    TwilioAuthenticationError,
+    TwilioPermissionError,
+    TwilioResourceError,
+)
 
 # Load environment variables
 load_dotenv()
@@ -197,6 +205,13 @@ async def create_outbound_call(call_request: OutboundCallRequest):
 
     Returns:
         OutboundCallResponse with call_sid and other call details
+
+    Raises:
+        400: Invalid phone number or request parameters
+        429: Rate limit exceeded
+        401: Authentication failed
+        403: Permission denied
+        500: Internal server error
     """
     try:
         # Generate unique call ID
@@ -226,9 +241,67 @@ async def create_outbound_call(call_request: OutboundCallRequest):
         call_record = db.get_call(db_call_id)
 
         return OutboundCallResponse(**call_record)
+
+    except TwilioValidationError as e:
+        logger.error(f"Validation error creating outbound call: {e.message} (Twilio code: {e.twilio_code})")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Invalid request parameters",
+                "message": e.message,
+                "twilio_code": e.twilio_code
+            }
+        )
+    except TwilioRateLimitError as e:
+        logger.error(f"Rate limit error creating outbound call: {e.message} (Twilio code: {e.twilio_code})")
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error": "Rate limit exceeded",
+                "message": e.message,
+                "twilio_code": e.twilio_code,
+                "retry_after": "Please try again later"
+            }
+        )
+    except TwilioAuthenticationError as e:
+        logger.error(f"Authentication error creating outbound call: {e.message} (Twilio code: {e.twilio_code})")
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "Authentication failed",
+                "message": "Twilio authentication failed. Please check server configuration.",
+                "twilio_code": e.twilio_code
+            }
+        )
+    except TwilioPermissionError as e:
+        logger.error(f"Permission error creating outbound call: {e.message} (Twilio code: {e.twilio_code})")
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Permission denied",
+                "message": e.message,
+                "twilio_code": e.twilio_code
+            }
+        )
+    except TwilioError as e:
+        logger.error(f"Twilio error creating outbound call: {e.message} (Twilio code: {e.twilio_code})")
+        raise HTTPException(
+            status_code=e.status_code,
+            detail={
+                "error": "Twilio service error",
+                "message": e.message,
+                "twilio_code": e.twilio_code
+            }
+        )
     except Exception as e:
         logger.error(f"Failed to create outbound call: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "Internal server error",
+                "message": "An unexpected error occurred while creating the call"
+            }
+        )
 
 
 @app.get("/users/{user_id}/calls", response_model=CallListResponse)
@@ -483,8 +556,113 @@ async def handle_voice_callback(
         )
 
 
+async def retry_call_background(call_sid: str, max_attempts: int = 3):
+    """
+    Background task to retry a failed call with proper error handling
+
+    Args:
+        call_sid: The Twilio Call SID of the failed call
+        max_attempts: Maximum number of retry attempts
+    """
+    try:
+        logger.info(f"Background retry task started for call: {call_sid}")
+
+        # Get the original call details
+        call = db.get_call_by_twilio_sid(call_sid)
+        if not call:
+            logger.error(f"Cannot retry - call not found: {call_sid}")
+            return
+
+        # Check retry count
+        retry_count = call.get("retry_count", 0)
+        if retry_count >= max_attempts:
+            logger.info(f"Call {call_sid} has reached max retry attempts ({max_attempts})")
+            return
+
+        # Extract call details
+        to_number = call.get("to_number")
+        user_external_id = call.get("user_external_id")
+        script = call.get("script")
+        recording_enabled = call.get("recording_enabled", True)
+
+        if not to_number:
+            logger.error(f"Cannot retry - no destination number for call: {call_sid}")
+            return
+
+        # Generate new call ID
+        new_call_id = str(uuid.uuid4())
+
+        logger.info(f"Retrying call {call_sid} to {to_number} (attempt {retry_count + 1}/{max_attempts})")
+
+        # Initiate retry call with error handling
+        try:
+            twilio_response = twilio_client.make_outbound_call(
+                to_number=to_number,
+                call_id=new_call_id,
+                script=script,
+                recording_enabled=recording_enabled,
+            )
+        except TwilioValidationError as e:
+            # Invalid number - don't retry
+            logger.error(f"Validation error on retry {call_sid}: {e.message}. Will not retry.")
+            db.update_call_by_twilio_sid(call_sid, {
+                "retry_error": f"Validation failed: {e.message}",
+                "retry_count": retry_count + 1
+            })
+            return
+        except TwilioRateLimitError as e:
+            # Rate limited - log but don't increment retry count
+            logger.warning(f"Rate limited on retry {call_sid}: {e.message}. Will retry later.")
+            return
+        except (TwilioAuthenticationError, TwilioPermissionError) as e:
+            # Auth/permission errors - don't retry
+            logger.error(f"Auth/permission error on retry {call_sid}: {e.message}. Will not retry.")
+            db.update_call_by_twilio_sid(call_sid, {
+                "retry_error": f"Auth/permission failed: {e.message}",
+                "retry_count": retry_count + 1
+            })
+            return
+        except TwilioError as e:
+            # Other Twilio errors - increment count and log
+            logger.error(f"Twilio error on retry {call_sid}: {e.message}")
+            db.update_call_by_twilio_sid(call_sid, {
+                "retry_error": e.message,
+                "retry_count": retry_count + 1
+            })
+            return
+
+        # Store new call record
+        new_call_data = {
+            "call_id": new_call_id,
+            "user_external_id": user_external_id,
+            "to_number": to_number,
+            "from_number": twilio_client.from_number,
+            "status": "initiated",
+            "script": script,
+            "recording_enabled": recording_enabled,
+            "twilio_sid": twilio_response["call_sid"],
+            "is_retry": True,
+            "retry_of_call_sid": call_sid,
+            "retry_attempt": retry_count + 1,
+        }
+
+        db_call_id = db.create_call(new_call_data)
+
+        # Update original call's retry count
+        db.update_call_by_twilio_sid(
+            call_sid,
+            {"retry_count": retry_count + 1}
+        )
+
+        logger.info(f"Successfully retried call {call_sid} -> {twilio_response['call_sid']}")
+
+    except Exception as e:
+        logger.error(f"Failed to retry call {call_sid} in background: {str(e)}")
+
+
 @app.post("/twilio/status")
 async def handle_status_callback(
+    background_tasks: BackgroundTasks,
     CallSid: str,
     CallStatus: str,
     To: str,
@@ -498,6 +676,7 @@ async def handle_status_callback(
     """
     Handle call status updates from Twilio
     This webhook is called when call status changes
+    Automatically enqueues retry tasks for failed calls
     """
     try:
         logger.info(f"Received status update: CallSid={CallSid}, Status={CallStatus}")
@@ -546,6 +725,13 @@ async def handle_status_callback(
         )
 
         logger.info(f"Call {CallSid} status updated to {status}")
+
+        # Enqueue background retry task for failed calls
+        retry_statuses = ["failed", "no-answer", "busy"]
+        if status in retry_statuses:
+            logger.info(f"Enqueuing background retry task for call {CallSid} with status {status}")
+            background_tasks.add_task(retry_call_background, CallSid, 3)
+
         return {"status": "ok"}
     except Exception as e:
         logger.error(f"Failed to handle status callback: {str(e)}")
@@ -614,6 +800,97 @@ async def handle_recording_callback(
 # ============================================================================
 # Error Handlers
 # ============================================================================
+
+
+@app.exception_handler(TwilioValidationError)
+async def twilio_validation_error_handler(request: Request, exc: TwilioValidationError):
+    """Handle Twilio validation errors (invalid phone numbers, etc.)"""
+    logger.error(f"Twilio validation error: {exc.message} (code: {exc.twilio_code})")
+    return JSONResponse(
+        status_code=400,
+        content={
+            "error": "Invalid request parameters",
+            "message": exc.message,
+            "twilio_code": exc.twilio_code,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+    )
+
+
+@app.exception_handler(TwilioRateLimitError)
+async def twilio_rate_limit_error_handler(request: Request, exc: TwilioRateLimitError):
+    """Handle Twilio rate limit errors"""
+    logger.error(f"Twilio rate limit error: {exc.message} (code: {exc.twilio_code})")
+    return JSONResponse(
+        status_code=429,
+        content={
+            "error": "Rate limit exceeded",
+            "message": exc.message,
+            "twilio_code": exc.twilio_code,
+            "retry_after": "Please try again later",
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+    )
+
+
+@app.exception_handler(TwilioAuthenticationError)
+async def twilio_auth_error_handler(request: Request, exc: TwilioAuthenticationError):
+    """Handle Twilio authentication errors"""
+    logger.error(f"Twilio authentication error: {exc.message} (code: {exc.twilio_code})")
+    return JSONResponse(
+        status_code=401,
+        content={
+            "error": "Authentication failed",
+            "message": "Twilio service authentication failed. Please contact support.",
+            "twilio_code": exc.twilio_code,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+    )
+
+
+@app.exception_handler(TwilioPermissionError)
+async def twilio_permission_error_handler(request: Request, exc: TwilioPermissionError):
+    """Handle Twilio permission errors"""
+    logger.error(f"Twilio permission error: {exc.message} (code: {exc.twilio_code})")
+    return JSONResponse(
+        status_code=403,
+        content={
+            "error": "Permission denied",
+            "message": exc.message,
+            "twilio_code": exc.twilio_code,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+    )
+
+
+@app.exception_handler(TwilioResourceError)
+async def twilio_resource_error_handler(request: Request, exc: TwilioResourceError):
+    """Handle Twilio resource not found errors"""
+    logger.error(f"Twilio resource error: {exc.message} (code: {exc.twilio_code})")
+    return JSONResponse(
+        status_code=404,
+        content={
+            "error": "Resource not found",
+            "message": exc.message,
+            "twilio_code": exc.twilio_code,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+    )
+
+
+@app.exception_handler(TwilioError)
+async def twilio_error_handler(request: Request, exc: TwilioError):
+    """Handle general Twilio errors"""
+    logger.error(f"Twilio error: {exc.message} (code: {exc.twilio_code})")
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": "Twilio service error",
+            "message": exc.message,
+            "twilio_code": exc.twilio_code,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+    )
 
 
 @app.exception_handler(HTTPException)
