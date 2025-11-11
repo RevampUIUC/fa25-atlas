@@ -486,8 +486,84 @@ async def handle_voice_callback(
         )
 
 
+async def retry_call_background(call_sid: str, max_attempts: int = 3):
+    """
+    Background task to retry a failed call
+
+    Args:
+        call_sid: The Twilio Call SID of the failed call
+        max_attempts: Maximum number of retry attempts
+    """
+    try:
+        logger.info(f"Background retry task started for call: {call_sid}")
+
+        # Get the original call details
+        call = db.get_call_by_twilio_sid(call_sid)
+        if not call:
+            logger.error(f"Cannot retry - call not found: {call_sid}")
+            return
+
+        # Check retry count
+        retry_count = call.get("retry_count", 0)
+        if retry_count >= max_attempts:
+            logger.info(f"Call {call_sid} has reached max retry attempts ({max_attempts})")
+            return
+
+        # Extract call details
+        to_number = call.get("to_number")
+        user_external_id = call.get("user_external_id")
+        script = call.get("script")
+        recording_enabled = call.get("recording_enabled", True)
+
+        if not to_number:
+            logger.error(f"Cannot retry - no destination number for call: {call_sid}")
+            return
+
+        # Generate new call ID
+        new_call_id = str(uuid.uuid4())
+
+        logger.info(f"Retrying call {call_sid} to {to_number} (attempt {retry_count + 1}/{max_attempts})")
+
+        # Initiate retry call
+        twilio_response = twilio_client.make_outbound_call(
+            to_number=to_number,
+            call_id=new_call_id,
+            script=script,
+            recording_enabled=recording_enabled,
+        )
+
+        # Store new call record
+        new_call_data = {
+            "call_id": new_call_id,
+            "user_external_id": user_external_id,
+            "to_number": to_number,
+            "from_number": twilio_client.from_number,
+            "status": "initiated",
+            "script": script,
+            "recording_enabled": recording_enabled,
+            "twilio_sid": twilio_response["call_sid"],
+            "is_retry": True,
+            "retry_of_call_sid": call_sid,
+            "retry_attempt": retry_count + 1,
+        }
+
+        db_call_id = db.create_call(new_call_data)
+
+        # Update original call's retry count
+        db.update_call_by_twilio_sid(
+            call_sid,
+            {"retry_count": retry_count + 1}
+        )
+
+        logger.info(f"Successfully retried call {call_sid} -> {twilio_response['call_sid']}")
+
+    except Exception as e:
+        logger.error(f"Failed to retry call {call_sid} in background: {str(e)}")
+
+
 @app.post("/twilio/status")
 async def handle_status_callback(
+    background_tasks: BackgroundTasks,
     CallSid: str,
     CallStatus: str,
     To: str,
@@ -501,6 +577,7 @@ async def handle_status_callback(
     """
     Handle call status updates from Twilio
     This webhook is called when call status changes
+    Automatically enqueues retry tasks for failed calls
     """
     try:
         logger.info(f"Received status update: CallSid={CallSid}, Status={CallStatus}")
@@ -549,6 +626,13 @@ async def handle_status_callback(
         )
 
         logger.info(f"Call {CallSid} status updated to {status}")
+
+        # Enqueue background retry task for failed calls
+        retry_statuses = ["failed", "no-answer", "busy"]
+        if status in retry_statuses:
+            logger.info(f"Enqueuing background retry task for call {CallSid} with status {status}")
+            background_tasks.add_task(retry_call_background, CallSid, 3)
+
         return {"status": "ok"}
     except Exception as e:
         logger.error(f"Failed to handle status callback: {str(e)}")
