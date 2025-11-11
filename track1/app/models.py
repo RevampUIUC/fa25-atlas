@@ -110,3 +110,56 @@ class CallListResponse(BaseModel):
     page: int
     page_size: int
     data: List[OutboundCallResponse]
+
+
+class CallFeedbackRequest(BaseModel):
+    """Call feedback with five scoring dimensions"""
+    call_quality: int = Field(..., ge=1, le=5, description="Call audio quality (1-5)")
+    agent_helpfulness: int = Field(..., ge=1, le=5, description="Agent helpfulness (1-5)")
+    resolution: int = Field(..., ge=1, le=5, description="Issue resolution (1-5)")
+    call_ease: int = Field(..., ge=1, le=5, description="Ease of call experience (1-5)")
+    overall_satisfaction: int = Field(..., ge=1, le=5, description="Overall satisfaction (1-5)")
+    notes: Optional[str] = Field(None, max_length=2000, description="Optional feedback notes")
+
+
+class CallFeedbackResponse(BaseModel):
+    """Call feedback response"""
+    call_sid: str
+    call_quality: int
+    agent_helpfulness: int
+    resolution: int
+    call_ease: int
+    overall_satisfaction: int
+    notes: Optional[str]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class CallRetryRequest(BaseModel):
+    """Request to retry failed calls"""
+    call_sid: Optional[str] = Field(None, description="Specific call SID to retry (optional)")
+    user_external_id: Optional[str] = Field(None, description="Retry all failed calls for this user (optional)")
+    max_retry_attempts: int = Field(default=3, ge=1, le=10, description="Maximum retry attempts (1-10)")
+    retry_statuses: List[str] = Field(
+        default=["failed", "no-answer", "busy"],
+        description="Call statuses to retry"
+    )
+
+
+class CallRetryResult(BaseModel):
+    """Result of a single call retry"""
+    original_call_sid: str
+    new_call_sid: Optional[str]
+    to_number: str
+    status: str
+    message: str
+
+
+class CallRetryResponse(BaseModel):
+    """Response from retry endpoint"""
+    total_attempted: int
+    successful_retries: int
+    failed_retries: int
+    results: List[CallRetryResult]

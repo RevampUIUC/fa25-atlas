@@ -30,43 +30,77 @@ track1/
 
 ### Prerequisites
 
-- Python 3.8+
-- MongoDB (local or Atlas)
-- Twilio account with credits
-- pip
+- **Python** 3.8 or higher
+- **MongoDB** (local instance or MongoDB Atlas cloud)
+- **Twilio Account** with phone number and credits
+- **pip** package manager
+- **Virtual Environment** tool (venv)
 
-### Setup Steps
+### Quick Setup
 
-1. **Navigate to the project**
+1. **Clone and navigate to the project**
    ```bash
-   cd track1
+   cd fa25-atlas/track1
    ```
 
-2. **Create virtual environment**
+2. **Create and activate virtual environment**
    ```bash
+   # Linux/Mac
    python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   source venv/bin/activate
+
+   # Windows
+   python -m venv venv
+   venv\Scripts\activate
    ```
 
-3. **Install dependencies**
+3. **Install Python dependencies**
    ```bash
    pip install -r requirements.txt
    ```
 
-4. **Configure environment variables**
-   - Edit `.env` with your credentials:
-     ```bash
-     # Twilio
-     TWILIO_ACCOUNT_SID=your_account_sid
-     TWILIO_AUTH_TOKEN=your_auth_token
-     TWILIO_FROM_NUMBER=+1234567890
+4. **Create and configure `.env` file**
+   ```bash
+   cp .env.example .env  # Or create manually
+   ```
 
-     # MongoDB
-     MONGO_URI=mongodb+srv://user:password@cluster.mongodb.net/atlas
+   Edit `.env` with your credentials:
+   ```env
+   # Application Environment
+   ENVIRONMENT=development
+   HOST=0.0.0.0
+   PORT=8000
 
-     # Application
-     BASE_URL=http://localhost:8000
-     ```
+   # Twilio Configuration
+   TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+   TWILIO_AUTH_TOKEN=your_auth_token_here
+   TWILIO_FROM_NUMBER=+1234567890
+
+   # MongoDB Configuration
+   MONGO_URI=mongodb+srv://username:password@cluster.mongodb.net/?retryWrites=true&w=majority
+   MONGO_DB=atlas
+
+   # Application URLs
+   BASE_URL=http://localhost:8000
+
+   # Logging
+   LOG_LEVEL=INFO
+   ```
+
+5. **Verify MongoDB connection**
+   ```bash
+   # Test MongoDB connectivity (optional)
+   # Ensure MongoDB is running and accessible
+   ```
+
+6. **Run the application**
+   ```bash
+   python -m uvicorn app.main:app --reload
+   ```
+
+   The API will be available at: `http://localhost:8000`
+   Swagger documentation: `http://localhost:8000/docs`
+   ReDoc documentation: `http://localhost:8000/redoc`
 
 ## API Endpoints
 
@@ -107,57 +141,254 @@ gunicorn -w 4 -b 0.0.0.0:8000 app.main:app
 
 ## API Usage Examples
 
+### Setup for Examples
+
+Store your call SID from a previous call creation. Replace placeholders:
+- `{user_id}` - User ID from create user response
+- `{call_sid}` - Twilio Call SID (starts with `CA`)
+- `http://localhost:8000` - Your API base URL
+
 ### 1. Create a User
 
+**curl:**
 ```bash
 curl -X POST "http://localhost:8000/users" \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "John Doe",
-    "email": "john@example.com",
-    "phone_number": "+1234567890"
+    "name": "Jane Smith",
+    "email": "jane.smith@example.com",
+    "phone_number": "+14155551234"
   }'
+```
+
+**Postman:**
+- Method: `POST`
+- URL: `http://localhost:8000/users`
+- Header: `Content-Type: application/json`
+- Body (raw JSON):
+```json
+{
+  "name": "Jane Smith",
+  "email": "jane.smith@example.com",
+  "phone_number": "+14155551234"
+}
 ```
 
 ### 2. Initiate an Outbound Call
 
+**curl:**
 ```bash
 curl -X POST "http://localhost:8000/calls/outbound" \
   -H "Content-Type: application/json" \
   -d '{
-    "user_id": "user_id_from_create",
-    "to_number": "+1987654321",
-    "script": "Hello, this is a test call.",
+    "to": "+14155559876",
+    "user_external_id": "ext_user_123",
+    "script": "Hello, this is a test call from Atlas.",
     "recording_enabled": true
   }'
 ```
 
-### 3. List User Calls
-
-```bash
-curl "http://localhost:8000/users/{user_id}/calls?page=1&page_size=10"
+**Postman:**
+- Method: `POST`
+- URL: `http://localhost:8000/calls/outbound`
+- Header: `Content-Type: application/json`
+- Body (raw JSON):
+```json
+{
+  "to": "+14155559876",
+  "user_external_id": "ext_user_123",
+  "script": "Hello, this is a test call from Atlas.",
+  "recording_enabled": true
+}
 ```
 
-### 4. Health Check
+### 3. Submit Call Feedback (NEW)
 
+**curl:**
 ```bash
-curl "http://localhost:8000/health"
+curl -X PATCH "http://localhost:8000/calls/{call_sid}/feedback" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "call_quality": 4,
+    "agent_helpfulness": 5,
+    "resolution": 3,
+    "call_ease": 4,
+    "overall_satisfaction": 4,
+    "notes": "Agent was helpful but took a while to resolve the issue."
+  }'
 ```
+
+**Postman:**
+- Method: `PATCH`
+- URL: `http://localhost:8000/calls/{call_sid}/feedback`
+- Header: `Content-Type: application/json`
+- Body (raw JSON):
+```json
+{
+  "call_quality": 4,
+  "agent_helpfulness": 5,
+  "resolution": 3,
+  "call_ease": 4,
+  "overall_satisfaction": 4,
+  "notes": "Agent was helpful but took a while to resolve the issue."
+}
+```
+
+**Expected Response (200 OK):**
+```json
+{
+  "call_sid": "CA1234567890abcdef1234567890abcdef",
+  "call_quality": 4,
+  "agent_helpfulness": 5,
+  "resolution": 3,
+  "call_ease": 4,
+  "overall_satisfaction": 4,
+  "notes": "Agent was helpful but took a while to resolve the issue.",
+  "created_at": "2025-11-03T15:45:30.123456"
+}
+```
+
+### 4. Retrieve Call Feedback (NEW)
+
+**curl:**
+```bash
+curl -X GET "http://localhost:8000/calls/{call_sid}/feedback" \
+  -H "Content-Type: application/json"
+```
+
+**Postman:**
+- Method: `GET`
+- URL: `http://localhost:8000/calls/{call_sid}/feedback`
+
+### 5. List User Calls
+
+**curl:**
+```bash
+curl -X GET "http://localhost:8000/users/{user_id}/calls?page=1&page_size=10" \
+  -H "Content-Type: application/json"
+```
+
+**Postman:**
+- Method: `GET`
+- URL: `http://localhost:8000/users/{user_id}/calls?page=1&page_size=10`
+
+### 6. Health Check
+
+**curl:**
+```bash
+curl -X GET "http://localhost:8000/health"
+```
+
+**Postman:**
+- Method: `GET`
+- URL: `http://localhost:8000/health`
+
+## Error Handling Examples
+
+### 400 Bad Request - Invalid Feedback Scores
+
+**curl:**
+```bash
+curl -X PATCH "http://localhost:8000/calls/{call_sid}/feedback" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "call_quality": 6,
+    "agent_helpfulness": 5,
+    "resolution": 3,
+    "call_ease": 4,
+    "overall_satisfaction": 4
+  }'
+```
+
+**Response (400):**
+```json
+{
+  "detail": "Invalid call_quality: must be an integer between 1 and 5"
+}
+```
+
+### 404 Not Found - Call Not Found
+
+**curl:**
+```bash
+curl -X GET "http://localhost:8000/calls/INVALID_SID/feedback"
+```
+
+**Response (404):**
+```json
+{
+  "detail": "Call not found: INVALID_SID"
+}
+```
+
+### 404 Not Found - No Feedback for Call
+
+**curl:**
+```bash
+curl -X GET "http://localhost:8000/calls/{call_sid}/feedback"
+```
+
+**Response (404):**
+```json
+{
+  "detail": "No feedback found for call: {call_sid}"
+}
+```
+
+### 500 Internal Server Error
+
+**Response (500):**
+```json
+{
+  "detail": "Internal server error: unexpected error occurred"
+}
+```
+
+Check application logs for detailed error messages.
 
 ## Environment Variables
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| ENVIRONMENT | App environment | development, production |
-| HOST | Server host | 0.0.0.0 |
-| PORT | Server port | 8000 |
-| TWILIO_ACCOUNT_SID | Twilio account ID | ACxxxxxxxxx |
-| TWILIO_AUTH_TOKEN | Twilio auth token | xxxxxxxxxxxx |
-| TWILIO_FROM_NUMBER | Outbound call number | +1234567890 |
-| MONGO_URI | MongoDB connection string | mongodb://localhost:27017 |
-| MONGO_DB | Database name | atlas |
-| BASE_URL | Application base URL | http://localhost:8000 |
-| LOG_LEVEL | Logging level | INFO, DEBUG |
+### Required Variables
+
+| Variable | Description | Example | Notes |
+|----------|-------------|---------|-------|
+| **TWILIO_ACCOUNT_SID** | Twilio Account SID | `ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx` | Find in Twilio Console |
+| **TWILIO_AUTH_TOKEN** | Twilio Authentication Token | `your_auth_token_here` | Find in Twilio Console |
+| **TWILIO_FROM_NUMBER** | Outbound phone number | `+14155552671` | Verified Twilio phone number |
+| **MONGO_URI** | MongoDB connection string | `mongodb+srv://user:pass@cluster.mongodb.net/?retryWrites=true&w=majority` | MongoDB Atlas or local |
+| **BASE_URL** | Application webhook base URL | `http://localhost:8000` | For local: `http://localhost:8000`; For production: your domain |
+
+### Optional Variables
+
+| Variable | Description | Default | Example |
+|----------|-------------|---------|---------|
+| ENVIRONMENT | Application environment | `development` | `development` or `production` |
+| HOST | Server host | `0.0.0.0` | `0.0.0.0`, `127.0.0.1` |
+| PORT | Server port | `8000` | `8000`, `5000` |
+| MONGO_DB | MongoDB database name | `atlas` | `atlas`, `atlas_dev` |
+| LOG_LEVEL | Logging verbosity | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+
+### How to Get Twilio Credentials
+
+1. Go to [Twilio Console](https://www.twilio.com/console)
+2. Look for **Account SID** and **Auth Token** on the main dashboard
+3. In **Phone Numbers > Manage Numbers**, get your verified phone number for `TWILIO_FROM_NUMBER`
+
+### How to Set Up MongoDB
+
+**Local MongoDB:**
+```env
+MONGO_URI=mongodb://localhost:27017
+```
+
+**MongoDB Atlas (Cloud):**
+1. Create cluster at [MongoDB Atlas](https://www.mongodb.com/cloud/atlas)
+2. Create database user with password
+3. Whitelist your IP address
+4. Copy connection string:
+```env
+MONGO_URI=mongodb+srv://username:password@cluster0.xxxxx.mongodb.net/?retryWrites=true&w=majority
+```
 
 ## Testing
 

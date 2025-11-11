@@ -1,5 +1,161 @@
 # Changelog - Atlas Twilio Call Management API
 
+## [1.3.0] - 2025-11-03 - Call Feedback System
+
+### 📊 Call Feedback Feature
+
+#### New Feedback Endpoints
+- **PATCH /calls/{call_sid}/feedback** - Submit call feedback
+  - Request body with five scoring fields (1-5 scale):
+    - `call_quality` - Call audio quality rating
+    - `agent_helpfulness` - Agent helpfulness rating
+    - `resolution` - Issue resolution rating
+    - `call_ease` - Call experience ease rating
+    - `overall_satisfaction` - Overall satisfaction rating
+  - Optional `notes` field (max 2000 characters) for detailed feedback
+  - Input validation: All scores must be 1-5, notes optional
+  - Stores feedback nested in calls collection with `feedback_provided_at` timestamp
+  - Returns `CallFeedbackResponse` with submitted data
+
+- **GET /calls/{call_sid}/feedback** - Retrieve call feedback
+  - Returns stored feedback for a specific call
+  - Includes all five scoring fields and notes
+  - Returns 404 if no feedback found for call
+  - Includes `feedback_provided_at` timestamp
+
+#### Database Changes
+- **calls collection** - Added nested `feedback` document:
+  - `feedback.call_quality` - integer (1-5)
+  - `feedback.agent_helpfulness` - integer (1-5)
+  - `feedback.resolution` - integer (1-5)
+  - `feedback.call_ease` - integer (1-5)
+  - `feedback.overall_satisfaction` - integer (1-5)
+  - `feedback.notes` - optional string (max 2000 chars)
+  - `feedback.feedback_provided_at` - timestamp
+
+#### Data Models (in `app/models.py`)
+- **CallFeedbackRequest** - Request model with validation
+  - Five integer fields: 1-5 scale validation
+  - Optional notes field with max 2000 character limit
+  - Field descriptions for API documentation
+
+- **CallFeedbackResponse** - Response model
+  - Returns call_sid and all five scoring fields
+  - Includes optional notes
+  - Includes `created_at` timestamp from `feedback_provided_at`
+
+#### DAO Methods (in `app/dao.py`)
+- **save_feedback(call_sid, feedback_data)** - Store feedback
+  - Updates existing call document with feedback nested object
+  - Adds `feedback_provided_at` timestamp
+  - Updates parent `updated_at` timestamp
+  - Returns boolean success status
+  - Logs errors appropriately
+
+- **get_call_feedback(call_sid)** - Retrieve feedback
+  - Fetches feedback from existing call document
+  - Returns feedback dict with call_sid and created_at
+  - Returns None if no feedback found
+  - Includes error handling and logging
+
+**Request Example:**
+```json
+PATCH /calls/CA1234567890abcdef1234567890abcdef/feedback
+{
+  "call_quality": 4,
+  "agent_helpfulness": 5,
+  "resolution": 3,
+  "call_ease": 4,
+  "overall_satisfaction": 4,
+  "notes": "Agent was helpful but took a while to resolve the issue."
+}
+```
+
+**Response Example:**
+```json
+{
+  "call_sid": "CA1234567890abcdef1234567890abcdef",
+  "call_quality": 4,
+  "agent_helpfulness": 5,
+  "resolution": 3,
+  "call_ease": 4,
+  "overall_satisfaction": 4,
+  "notes": "Agent was helpful but took a while to resolve the issue.",
+  "created_at": "2025-11-03T15:45:30.123456"
+}
+```
+
+#### Validation Features
+- Input validation via Pydantic models
+- Score range validation (1-5 inclusive)
+- Notes length validation (max 2000 chars)
+- Call existence verification before storing feedback
+- HTTP 404 if call not found
+- HTTP 400 if feedback save fails
+- Comprehensive error logging
+
+---
+
+## [1.2.0] - 2025-11-03 - Voice Handler Enhancement with Consent & Transcription
+
+### 🎤 Voice Endpoint Enhancements
+
+#### POST /twilio/voice Endpoint Upgrade
+- **Added client-approved consent message** - Plays consent disclosure before recording
+  - Informs callers that call may be recorded for quality assurance and training
+  - Provides explicit opt-out option by hanging up
+  - Enhances legal compliance for call recording
+
+- **Implemented transcription capabilities**
+  - Enabled `transcribe="true"` in Record element
+  - Added `transcribe_callback` pointing to `/twilio/recording` endpoint
+  - Automatic speech-to-text conversion on all recordings
+  - Transcription text stored alongside recording metadata
+
+- **Optimized TwiML generation flow**
+  - Consent message plays first (before any custom script)
+  - Custom script or default message plays after consent
+  - Recording captures full call including consent acknowledgment
+  - Automatic hangup after recording completion
+
+**TwiML Response Structure:**
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="alice">
+        This call may be recorded for quality assurance and training purposes.
+        By remaining on the line, you consent to this recording.
+        If you do not consent, please hang up now.
+    </Say>
+    <Say voice="alice">[custom script or default message]</Say>
+    <Record
+        maxSpeechTime="3600"
+        speechTimeout="5"
+        trim="trim-silence"
+        transcribe="true"
+        transcribeCallback="[BASE_URL]/twilio/recording"
+        recordingStatusCallback="[BASE_URL]/twilio/recording"
+        recordingStatusCallbackMethod="POST"
+    />
+    <Hangup/>
+</Response>
+```
+
+**Updated Method in `app/twilio_client.py`:**
+- `generate_twiml_response(script, record_call)` - Enhanced TwiML generator
+  - Now includes consent disclosure message
+  - Implements transcription callbacks
+  - Maintains backward compatibility with existing call flows
+  - Proper ordering of Say/Record elements per Twilio best practices
+
+**Updated Endpoint in `app/main.py`:**
+- `POST /twilio/voice?call_id={call_id}&recording={boolean}` - Voice handler
+  - Continues to work with existing outbound call system
+  - Automatically applies new consent + transcription features
+  - No breaking changes to request/response format
+
+---
+
 ## [1.1.0] - 2025-11-02 - Twilio Integration Update
 
 ### 🚀 Updates
@@ -580,13 +736,19 @@ gunicorn -w 4 -b 0.0.0.0:8000 app.main:app
 
 ## Version Information
 
-- **Version:** 1.0.0
-- **Release Date:** 2025-11-02
-- **Status:** Initial Release
+- **Current Version:** 1.3.0
+- **Latest Release Date:** 2025-11-03
+- **Status:** Active Development
 - **Python:** 3.8+
 - **FastAPI:** 0.104.1
 - **Twilio SDK:** 9.0.4
 - **MongoDB:** 4.6.0+
+
+**Version History:**
+- v1.3.0 (2025-11-03) - Call feedback system with five scoring fields
+- v1.2.0 (2025-11-03) - Voice handler enhancement with consent & transcription
+- v1.1.0 (2025-11-02) - Twilio integration update
+- v1.0.0 (2025-11-02) - Initial release
 
 ---
 
@@ -595,13 +757,15 @@ gunicorn -w 4 -b 0.0.0.0:8000 app.main:app
 - All webhook endpoints are automatically called by Twilio
 - No manual webhook testing required after Twilio configuration
 - Status callbacks track call state in real-time
-- Recording callbacks store audio URLs in database
+- Recording callbacks store audio URLs and transcriptions in database
+- Consent message is legally compliant and plays before recording
+- Automatic transcription requires Twilio transcription service enabled on account
 - Application is production-ready with minor configuration
 - Comprehensive logging enables easy debugging
 - API documentation auto-generated via Swagger UI
 
 ---
 
-*Generated: 2025-11-02*
+*Last Updated: 2025-11-03*
 *Project: Atlas - Twilio Call Management API*
-*Version: 1.0.0*
+*Current Version: 1.3.0*
