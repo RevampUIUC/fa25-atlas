@@ -1,8 +1,8 @@
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
-from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Query, BackgroundTasks, Form
 from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
@@ -20,6 +20,7 @@ from app.models import (
     CallListResponse,
     CallFeedbackRequest,
     CallFeedbackResponse,
+    CallStatus,
 )
 from app.dao import MongoDatabase
 from app.twilio_client import TwilioClient
@@ -185,47 +186,69 @@ async def create_user(user: UserCreate):
 
 
 @app.post("/calls/outbound", response_model=OutboundCallResponse)
-async def create_outbound_call(call_request: OutboundCallRequest):
-    """Initiate an outbound call
-
-    Args:
-        call_request: Request containing:
-            - to: Destination phone number
-            - user_external_id: External user identifier
-            - script: Optional script/message for the call
-            - recording_enabled: Whether to record the call (default: True)
-
-    Returns:
-        OutboundCallResponse with call_sid and other call details
-    """
+async def create_outbound_call(request: OutboundCallRequest):
+    """Create an outbound call with retry tracking"""
     try:
-        # Generate unique call ID
+        logger.info(f"Creating outbound call to {request.to}")
+        
+        # Generate unique call_id
         call_id = str(uuid.uuid4())
-
-        # Initiate Twilio call
+        
+        # Create Twilio call
         twilio_response = twilio_client.make_outbound_call(
-            to_number=call_request.to,
+            to_number=request.to,
             call_id=call_id,
-            script=call_request.script,
-            recording_enabled=call_request.recording_enabled,
+            script=request.script,
+            recording_enabled=request.recording_enabled,
         )
-
-        # Store call record in database
-        call_data = {
+        
+        call_sid = twilio_response["call_sid"]
+        
+        # Create call document with retry tracking
+        call_doc = {
             "call_id": call_id,
-            "user_external_id": call_request.user_external_id,
-            "to_number": call_request.to,
+            "user_id": request.user_external_id,
+            "user_external_id": request.user_external_id,
+            "to_number": request.to,
             "from_number": twilio_client.from_number,
-            "status": "initiated",
-            "script": call_request.script,
-            "recording_enabled": call_request.recording_enabled,
-            "twilio_sid": twilio_response["call_sid"],
+            "call_sid": call_sid,
+            "twilio_sid": call_sid,
+            "status": twilio_response.get("status", "initiated"),
+            "script": request.script,
+            "recording_enabled": request.recording_enabled,
+            "started_at": datetime.utcnow(),
+            
+            # RETRY TRACKING FIELDS
+            "attempt_count": 1,
+            "max_attempts": 3,
+            "should_retry": False,
+            "next_retry_at": None,
+            "attempts": [{
+                "attempt_number": 1,
+                "twilio_sid": call_sid,
+                "status": "initiated",
+                "timestamp": datetime.utcnow(),
+                "error_message": None
+            }],
+            
+            "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow()
         }
-
-        db_call_id = db.create_call(call_data)
-        call_record = db.get_call(db_call_id)
-
-        return OutboundCallResponse(**call_record)
+        
+        # Insert directly into MongoDB
+        result = db.db.calls.insert_one(call_doc)
+        
+        logger.info(f"Call created successfully: {call_sid}")
+        
+        return OutboundCallResponse(
+            call_id=call_id,
+            user_id=request.user_external_id,
+            to_number=request.to,
+            status=CallStatus.INITIATED,
+            created_at=datetime.utcnow(),
+            twilio_sid=call_sid,
+        )
+        
     except Exception as e:
         logger.error(f"Failed to create outbound call: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -251,6 +274,37 @@ async def list_user_calls(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/calls/{call_sid}/debug")
+async def get_call_debug(call_sid: str):
+    """Debug endpoint to check call retry status"""
+    try:
+        # Find call by call_sid
+        call = db.db.calls.find_one({"call_sid": call_sid})
+        
+        if not call:
+            raise HTTPException(status_code=404, detail="Call not found")
+        
+        return {
+            "call_id": call.get("call_id"),
+            "call_sid": call.get("call_sid"),
+            "twilio_sid": call.get("twilio_sid"),
+            "user_id": call.get("user_external_id"),
+            "to": call.get("to_number"),
+            "status": call.get("status"),
+            "attempt_count": call.get("attempt_count", 1),
+            "max_attempts": call.get("max_attempts", 3),
+            "should_retry": call.get("should_retry", False),
+            "next_retry_at": call.get("next_retry_at"),
+            "attempts": call.get("attempts", []),
+            "created_at": call.get("created_at")
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get call debug info: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ============================================================================
 # Call Feedback Endpoints
 # ============================================================================
@@ -258,21 +312,7 @@ async def list_user_calls(
 
 @app.patch("/calls/{call_sid}/feedback", response_model=CallFeedbackResponse)
 async def submit_call_feedback(call_sid: str, feedback: CallFeedbackRequest):
-    """
-    Submit feedback for a call
-
-    Args:
-        call_sid: Twilio Call SID
-        feedback: Feedback request with five scoring fields and optional notes
-
-    Returns:
-        CallFeedbackResponse with submitted feedback
-
-    Raises:
-        404: Call not found
-        400: Invalid feedback data
-        500: Database or server error
-    """
+    """Submit feedback for a call"""
     try:
         # Validate call_sid format
         if not call_sid or not isinstance(call_sid, str) or len(call_sid.strip()) == 0:
@@ -374,19 +414,7 @@ async def submit_call_feedback(call_sid: str, feedback: CallFeedbackRequest):
 
 @app.get("/calls/{call_sid}/feedback", response_model=CallFeedbackResponse)
 async def get_call_feedback(call_sid: str):
-    """
-    Get feedback for a specific call
-
-    Args:
-        call_sid: Twilio Call SID
-
-    Returns:
-        CallFeedbackResponse if feedback exists, 404 if not
-
-    Raises:
-        404: Call not found or no feedback for call
-        500: Database or server error
-    """
+    """Get feedback for a specific call"""
     try:
         # Validate call_sid format
         if not call_sid or not isinstance(call_sid, str) or len(call_sid.strip()) == 0:
@@ -454,15 +482,11 @@ async def handle_voice_callback(
     call_id: str = Query(...),
     recording: bool = Query(False),
 ):
-    """
-    Handle incoming voice requests from Twilio
-    Returns TwiML for call handling
-    """
+    """Handle incoming voice requests from Twilio - Returns TwiML"""
     try:
         # Get call details from database
         call = None
         if call_id:
-            # Search by call_id field
             call_record = db.db.calls.find_one({"call_id": call_id})
             if call_record:
                 call = call_record
@@ -476,7 +500,6 @@ async def handle_voice_callback(
         return Response(content=twiml, media_type="application/xml")
     except Exception as e:
         logger.error(f"Failed to handle voice callback: {str(e)}")
-        # Return basic TwiML on error
         return Response(
             content='<?xml version="1.0" encoding="UTF-8"?><Response><Say>An error occurred</Say></Response>',
             media_type="application/xml",
@@ -484,91 +507,96 @@ async def handle_voice_callback(
 
 
 @app.post("/twilio/status")
-async def handle_status_callback(
-    CallSid: str,
-    CallStatus: str,
-    To: str,
-    From: str,
-    Direction: str = None,
-    ApiVersion: str = None,
-    AccountSid: str = None,
-    Timestamp: str = None,
-    CallDuration: Optional[int] = None,
+async def twilio_status_callback(
+    CallSid: str = Form(...),
+    CallStatus: str = Form(...),
+    CallDuration: Optional[str] = Form(None),
 ):
-    """
-    Handle call status updates from Twilio
-    This webhook is called when call status changes
-    """
+    """Handle Twilio status callbacks with retry logic"""
     try:
-        logger.info(f"Received status update: CallSid={CallSid}, Status={CallStatus}")
-
-        # Update call status in database
-        call_status_map = {
-            "queued": "initiated",
-            "ringing": "ringing",
-            "in-progress": "in-progress",
-            "completed": "completed",
-            "failed": "failed",
-            "busy": "busy",
-            "no-answer": "no-answer",
-        }
-
-        status = call_status_map.get(CallStatus, CallStatus)
-
+        logger.info(f"Status callback: {CallSid} -> {CallStatus}")
+        
+        # Find the call by call_sid
+        call = db.db.calls.find_one({"call_sid": CallSid})
+        
+        if not call:
+            logger.warning(f"Call not found: {CallSid}")
+            return {"status": "ok"}
+        
+        # Update the current attempt status in the attempts array
+        attempts = call.get("attempts", [])
+        for attempt in attempts:
+            if attempt.get("twilio_sid") == CallSid:
+                attempt["status"] = CallStatus
+                if CallDuration:
+                    attempt["duration"] = int(CallDuration)
+                break
+        
+        # Prepare update data
         update_data = {
-            "status": status,
-            "twilio_status": CallStatus,
-            "to_number": To,
-            "from_number": From,
+            "status": CallStatus,
+            "attempts": attempts,
+            "updated_at": datetime.utcnow()
         }
-
-        if Direction:
-            update_data["direction"] = Direction
-
-        db.update_call_by_twilio_sid(CallSid, update_data)
-        # NEW: also set duration/ended_at via Track-1 contract
-        ended_at = (
-            datetime.utcnow()
-            if CallStatus in ("completed", "failed", "busy", "no-answer")
-            else None
+        
+        # Add duration if provided
+        if CallDuration:
+            update_data["duration_sec"] = int(CallDuration)
+        
+        # RETRY LOGIC
+        retry_statuses = ["busy", "no-answer", "failed"]
+        attempt_count = call.get("attempt_count", 1)
+        max_attempts = call.get("max_attempts", 3)
+        can_retry = attempt_count < max_attempts
+        
+        if CallStatus in retry_statuses and can_retry:
+            # Schedule retry with exponential backoff
+            retry_delays = [2, 5, 10]  # minutes
+            delay_index = attempt_count - 1
+            delay_minutes = retry_delays[delay_index] if delay_index < len(retry_delays) else 10
+            
+            next_retry = datetime.utcnow() + timedelta(minutes=delay_minutes)
+            
+            update_data["should_retry"] = True
+            update_data["next_retry_at"] = next_retry
+            
+            logger.info(f"Scheduling retry for {CallSid} in {delay_minutes} minutes (attempt {attempt_count + 1}/{max_attempts})")
+        else:
+            # No more retries
+            update_data["should_retry"] = False
+            update_data["next_retry_at"] = None
+            
+            if CallStatus == "completed":
+                logger.info(f"Call {CallSid} completed successfully on attempt {attempt_count}")
+            elif not can_retry:
+                logger.info(f"Call {CallSid} reached max attempts ({max_attempts})")
+        
+        # Update call in database using call_sid
+        db.db.calls.update_one(
+            {"call_sid": CallSid},
+            {"$set": update_data}
         )
-        # this won’t break anything; it upserts by call_sid if needed
-        db.update_call_status(
-            call_sid=CallSid,
-            status=status,
-            duration_sec=CallDuration,
-            ended_at=ended_at,
-            meta={"raw": {
-                "To": To, "From": From, "Direction": Direction,
-                "ApiVersion": ApiVersion, "AccountSid": AccountSid,
-                "Timestamp": Timestamp, "CallStatus": CallStatus
-            }},
-        )
-
-        logger.info(f"Call {CallSid} status updated to {status}")
+        
         return {"status": "ok"}
+        
     except Exception as e:
-        logger.error(f"Failed to handle status callback: {str(e)}")
-        return {"status": "ok"}  # Always return OK to prevent Twilio retries
+        logger.error(f"Error in status callback: {str(e)}")
+        return {"status": "ok"}
 
 
 @app.post("/twilio/recording")
 async def handle_recording_callback(
-    RecordingSid: str,
-    RecordingUrl: str,
-    RecordingStatus: str,
-    CallSid: str,
-    AccountSid: str = None,
-    ApiVersion: str = None,
-    TranscriptionText: Optional[str] = None,
+    RecordingSid: str = Form(...),
+    RecordingUrl: str = Form(...),
+    RecordingStatus: str = Form(...),
+    CallSid: str = Form(...),
+    AccountSid: str = Form(None),
+    ApiVersion: str = Form(None),
+    TranscriptionText: Optional[str] = Form(None),
 ):
-    """
-    Handle recording completion webhooks from Twilio
-    """
+    """Handle recording completion webhooks from Twilio"""
     try:
-        logger.info(
-            f"Received recording update: RecordingSid={RecordingSid}, Status={RecordingStatus}"
-        )
+        logger.info(f"Received recording update: {RecordingSid} -> {RecordingStatus}")
 
         # Get call from database
         call = db.get_call_by_twilio_sid(CallSid)
@@ -577,12 +605,10 @@ async def handle_recording_callback(
             return {"status": "ok"}
 
         # Create or update recording record
-        existing_recording = db.db.recordings.find_one(
-            {"twilio_sid": RecordingSid}
-        )
+        existing_recording = db.db.recordings.find_one({"twilio_sid": RecordingSid})
 
         recording_data = {
-            "call_id": call.get("id"),
+            "call_id": call.get("call_id"),
             "twilio_sid": RecordingSid,
             "recording_url": RecordingUrl,
             "recording_status": RecordingStatus,
@@ -596,8 +622,9 @@ async def handle_recording_callback(
 
         # Update call with recording URL
         if RecordingStatus == "completed":
-            db.update_call(call.get("id"), {"recording_url": RecordingUrl})
+            db.update_call(call.get("call_id"), {"recording_url": RecordingUrl})
 
+        # Save recording info
         db.save_recording(
             call_sid=CallSid,
             recording_url=RecordingUrl,
@@ -606,9 +633,92 @@ async def handle_recording_callback(
 
         logger.info(f"Recording {RecordingSid} processed successfully")
         return {"status": "ok"}
+        
     except Exception as e:
         logger.error(f"Failed to handle recording callback: {str(e)}")
-        return {"status": "ok"}  # Always return OK to prevent Twilio retries
+        return {"status": "ok"}
+
+
+# ============================================================================
+# Background Retry Job
+# ============================================================================
+
+from apscheduler.schedulers.background import BackgroundScheduler
+
+def process_retries():
+    """Background job to process retry calls"""
+    import asyncio
+    asyncio.run(async_process_retries())
+
+
+async def async_process_retries():
+    """Async function to process retries"""
+    try:
+        # Find calls that need retry
+        calls_cursor = db.db.calls.find({
+            "should_retry": True,
+            "next_retry_at": {"$lte": datetime.utcnow()},
+            "attempt_count": {"$lt": 3}
+        })
+        
+        calls = list(calls_cursor)
+        
+        if len(calls) > 0:
+            logger.info(f"Processing {len(calls)} calls for retry")
+        
+        for call in calls:
+            try:
+                call_id = call.get("call_id")
+                
+                # Make new Twilio call
+                new_call_response = twilio_client.make_outbound_call(
+                    to_number=call["to_number"],
+                    call_id=call_id,
+                    script=call.get("script"),
+                    recording_enabled=call.get("recording_enabled", True)
+                )
+                
+                new_call_sid = new_call_response["call_sid"]
+                
+                # Update MongoDB
+                new_attempt_number = call["attempt_count"] + 1
+                
+                db.db.calls.update_one(
+                    {"_id": call["_id"]},
+                    {
+                        "$set": {
+                            "attempt_count": new_attempt_number,
+                            "should_retry": False,
+                            "next_retry_at": None,
+                            "updated_at": datetime.utcnow()
+                        },
+                        "$push": {
+                            "attempts": {
+                                "attempt_number": new_attempt_number,
+                                "twilio_sid": new_call_sid,
+                                "status": "initiated",
+                                "timestamp": datetime.utcnow(),
+                                "error_message": None
+                            }
+                        }
+                    }
+                )
+                
+                logger.info(f"✓ Retried call {call['call_sid']}, attempt {new_attempt_number}/3")
+                
+            except Exception as e:
+                logger.error(f"✗ Error retrying call {call.get('call_sid')}: {str(e)}")
+    
+    except Exception as e:
+        logger.error(f"✗ Error in retry job: {str(e)}")
+
+
+# Start retry scheduler
+scheduler = BackgroundScheduler()
+scheduler.add_job(process_retries, 'interval', minutes=1)
+scheduler.start()
+
+logger.info("✓ Retry scheduler started (runs every 1 minute)")
 
 
 # ============================================================================

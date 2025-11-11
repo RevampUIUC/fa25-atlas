@@ -135,3 +135,38 @@ class CallFeedbackResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class CallAttempt(BaseModel):
+    attempt_number: int
+    twilio_sid: str
+    status: str
+    timestamp: datetime
+    error_message: Optional[str] = None
+
+class CallBase(BaseModel):
+    user_id: str = Field(..., description="User ID who made the call")
+    to: str = Field(..., min_length=10, description="Destination phone number")
+    from_number: str = Field(..., description="Twilio phone number")
+    twilio_sid: str = Field(..., description="Twilio Call SID")
+    status: str = "initiated"
+    script: Optional[str] = None
+    recording_enabled: bool = False
+    
+    # RETRY FIELDS
+    attempt_count: int = 1
+    max_attempts: int = 3
+    should_retry: bool = False
+    next_retry_at: Optional[datetime] = None
+    attempts: List[CallAttempt] = []
+
+class CallCreate(CallBase):
+    pass
+
+class Call(CallBase):
+    id: str
+    created_at: datetime
+    updated_at: datetime
+    
+    class Config:
+        from_attributes = True
