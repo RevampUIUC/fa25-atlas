@@ -51,6 +51,8 @@ class MongoDatabase:
                 self.db.calls.create_index([("twilio_sid", ASCENDING)], unique=True)
                 self.db.calls.create_index([("created_at", DESCENDING)])
                 self.db.calls.create_index([("status", ASCENDING)])
+                self.db.calls.create_index([("attempt_count", ASCENDING)])
+                self.db.calls.create_index([("updated_at", DESCENDING)])
 
             # Recordings collection indexes
             if "recordings" in self.db.list_collection_names():
@@ -521,3 +523,82 @@ class MongoDatabase:
         res = self.db.transcripts.insert_one(doc)
         return str(res.inserted_id)
 
+    def init_retry_plan(self, twilio_sid: str, retry_limit: int, retry_delay_sec: int) -> bool:
+        """
+        Ensure call doc has retry fields initialized.
+        """
+        try:
+            now = datetime.utcnow()
+            res = self.db.calls.update_one(
+                {"twilio_sid": twilio_sid},
+                {"$setOnInsert": {"attempts": []}},
+                upsert=False,
+            )
+            # Always ensure the scalar fields exist
+            self.db.calls.update_one(
+                {"twilio_sid": twilio_sid},
+                {
+                    "$set": {
+                        "retry_limit": retry_limit,
+                        "retry_delay_sec": retry_delay_sec,
+                        "attempt_count": {"$ifNull": ["$attempt_count", 0]},
+                        "updated_at": now,
+                    }
+                },
+                upsert=False,
+            )
+            # Fallback if $ifNull is not available in update (older servers)
+            self.db.calls.update_one(
+                {"twilio_sid": twilio_sid, "attempt_count": {"$exists": False}},
+                {"$set": {"attempt_count": 0, "updated_at": now}},
+            )
+            return True
+        except Exception as e:
+            logger.error(f"init_retry_plan failed for {twilio_sid}: {e}")
+            return False
+
+
+    def log_call_attempt(
+        self,
+        twilio_sid: str,
+        attempt_no: int,
+        status: str,
+        reason: Optional[str] = None,
+        at: Optional[datetime] = None,
+    ) -> bool:
+        """
+        Append an attempt record and bump attempt_count.
+        """
+        try:
+            at = at or datetime.utcnow()
+            update = {
+                "$push": {"attempts": {
+                    "attempt_no": attempt_no,
+                    "status": status,
+                    "reason": reason,
+                    "at": at,
+                }},
+                "$set": {"status": status, "updated_at": at},
+                "$inc": {"attempt_count": 1},
+            }
+            res = self.db.calls.update_one({"twilio_sid": twilio_sid}, update)
+            return res.modified_count > 0
+        except Exception as e:
+            logger.error(f"log_call_attempt failed for {twilio_sid}: {e}")
+            return False
+
+
+    def get_call_attempts(self, twilio_sid: str) -> List[Dict[str, Any]]:
+        """
+        Return attempts[] for a call (sorted by attempt_no).
+        """
+        try:
+            doc = self.db.calls.find_one(
+                {"twilio_sid": twilio_sid},
+                {"attempts": 1, "_id": 0}
+            )
+            attempts = (doc or {}).get("attempts", [])
+            return sorted(attempts, key=lambda x: x.get("attempt_no", 0))
+        except Exception as e:
+            logger.error(f"get_call_attempts failed for {twilio_sid}: {e}")
+            return []

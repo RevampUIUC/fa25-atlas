@@ -222,6 +222,9 @@ async def create_outbound_call(call_request: OutboundCallRequest):
 
         db_call_id = db.create_call(call_data)
         call_record = db.get_call(db_call_id)
+        retry_limit = int(os.getenv("RETRY_LIMIT", 3))
+        retry_delay = int(os.getenv("RETRY_DELAY", 10))
+        db.init_retry_plan(twilio_response["call_sid"], retry_limit, retry_delay)
 
         return OutboundCallResponse(**call_record)
     except Exception as e:
@@ -337,6 +340,22 @@ async def handle_status_callback(
             if CallStatus in ("completed", "failed", "busy", "no-answer")
             else None
         )
+
+        # Derive next attempt number from current count
+        call_doc = db.get_call_by_twilio_sid(CallSid) or {}
+        next_attempt_no = int(call_doc.get("attempt_count", 0)) + 1
+
+        # Reason is the raw Twilio status (helpful for auditing)
+        reason = CallStatus
+
+        # Log attempt (for all terminal/non-terminal statuses)
+        db.log_call_attempt(
+            twilio_sid=CallSid,
+            attempt_no=next_attempt_no,
+            status=status,
+            reason=reason,
+        )
+
         # this won’t break anything; it upserts by call_sid if needed
         db.update_call_status(
             call_sid=CallSid,
