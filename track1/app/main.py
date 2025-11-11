@@ -20,6 +20,9 @@ from app.models import (
     CallListResponse,
     CallFeedbackRequest,
     CallFeedbackResponse,
+    CallRetryRequest,
+    CallRetryResult,
+    CallRetryResponse,
 )
 from app.dao import MongoDatabase
 from app.twilio_client import TwilioClient
@@ -609,6 +612,200 @@ async def handle_recording_callback(
     except Exception as e:
         logger.error(f"Failed to handle recording callback: {str(e)}")
         return {"status": "ok"}  # Always return OK to prevent Twilio retries
+
+
+@app.post("/twilio/retry", response_model=CallRetryResponse)
+async def retry_failed_calls(retry_request: CallRetryRequest):
+    """
+    Retry failed calls automatically
+
+    This endpoint allows retrying calls that failed, weren't answered, or were busy.
+    You can retry a specific call by call_sid, all failed calls for a user, or
+    all calls matching the specified retry statuses.
+
+    Args:
+        retry_request: Request containing:
+            - call_sid: Optional specific call SID to retry
+            - user_external_id: Optional user external ID to retry all their failed calls
+            - max_retry_attempts: Maximum number of retry attempts (default: 3)
+            - retry_statuses: List of call statuses to retry (default: ["failed", "no-answer", "busy"])
+
+    Returns:
+        CallRetryResponse with summary and detailed results of retry attempts
+
+    Raises:
+        400: Invalid request parameters
+        404: No calls found matching criteria
+        500: Server error during retry
+    """
+    try:
+        logger.info(f"Retry request received: {retry_request.dict()}")
+
+        # Validate request - at least one of call_sid or user_external_id should be provided
+        if not retry_request.call_sid and not retry_request.user_external_id:
+            # If neither is provided, retry all calls with matching statuses
+            logger.info(f"Retrying all calls with statuses: {retry_request.retry_statuses}")
+
+        calls_to_retry = []
+
+        # Case 1: Retry specific call by call_sid
+        if retry_request.call_sid:
+            call = db.get_call_by_twilio_sid(retry_request.call_sid)
+            if not call:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Call not found: {retry_request.call_sid}"
+                )
+
+            # Check if call status is eligible for retry
+            if call.get("status") not in retry_request.retry_statuses:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Call status '{call.get('status')}' is not eligible for retry. Eligible statuses: {retry_request.retry_statuses}"
+                )
+
+            # Check retry count
+            retry_count = call.get("retry_count", 0)
+            if retry_count >= retry_request.max_retry_attempts:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Call has already been retried {retry_count} times (max: {retry_request.max_retry_attempts})"
+                )
+
+            calls_to_retry.append(call)
+
+        # Case 2: Retry all failed calls for a specific user
+        elif retry_request.user_external_id:
+            # Find user by external_id
+            user = db.db.users.find_one({"external_id": retry_request.user_external_id})
+            if not user:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"User not found: {retry_request.user_external_id}"
+                )
+
+            user_id = str(user["_id"])
+
+            # Find all calls for this user with eligible statuses
+            calls_cursor = db.db.calls.find({
+                "user_id": user_id,
+                "status": {"$in": retry_request.retry_statuses}
+            })
+
+            for call in calls_cursor:
+                retry_count = call.get("retry_count", 0)
+                if retry_count < retry_request.max_retry_attempts:
+                    calls_to_retry.append(call)
+
+        # Case 3: Retry all calls with matching statuses
+        else:
+            calls_cursor = db.db.calls.find({
+                "status": {"$in": retry_request.retry_statuses}
+            })
+
+            for call in calls_cursor:
+                retry_count = call.get("retry_count", 0)
+                if retry_count < retry_request.max_retry_attempts:
+                    calls_to_retry.append(call)
+
+        if not calls_to_retry:
+            raise HTTPException(
+                status_code=404,
+                detail="No eligible calls found for retry"
+            )
+
+        logger.info(f"Found {len(calls_to_retry)} calls eligible for retry")
+
+        # Retry each call
+        results = []
+        successful_retries = 0
+        failed_retries = 0
+
+        for call in calls_to_retry:
+            original_call_sid = call.get("twilio_sid") or call.get("call_sid")
+            to_number = call.get("to_number")
+            user_external_id = call.get("user_external_id")
+            script = call.get("script")
+            recording_enabled = call.get("recording_enabled", True)
+            retry_count = call.get("retry_count", 0)
+
+            try:
+                # Generate new call ID
+                new_call_id = str(uuid.uuid4())
+
+                # Initiate retry call
+                twilio_response = twilio_client.make_outbound_call(
+                    to_number=to_number,
+                    call_id=new_call_id,
+                    script=script,
+                    recording_enabled=recording_enabled,
+                )
+
+                # Store new call record
+                new_call_data = {
+                    "call_id": new_call_id,
+                    "user_external_id": user_external_id,
+                    "to_number": to_number,
+                    "from_number": twilio_client.from_number,
+                    "status": "initiated",
+                    "script": script,
+                    "recording_enabled": recording_enabled,
+                    "twilio_sid": twilio_response["call_sid"],
+                    "is_retry": True,
+                    "retry_of_call_sid": original_call_sid,
+                    "retry_attempt": retry_count + 1,
+                }
+
+                db_call_id = db.create_call(new_call_data)
+
+                # Update original call's retry count
+                db.update_call_by_twilio_sid(
+                    original_call_sid,
+                    {"retry_count": retry_count + 1}
+                )
+
+                successful_retries += 1
+                results.append(CallRetryResult(
+                    original_call_sid=original_call_sid,
+                    new_call_sid=twilio_response["call_sid"],
+                    to_number=to_number,
+                    status="success",
+                    message=f"Call retry initiated successfully (attempt {retry_count + 1})"
+                ))
+
+                logger.info(f"Successfully retried call {original_call_sid} -> {twilio_response['call_sid']}")
+
+            except Exception as e:
+                failed_retries += 1
+                error_message = str(e)
+                results.append(CallRetryResult(
+                    original_call_sid=original_call_sid,
+                    new_call_sid=None,
+                    to_number=to_number,
+                    status="failed",
+                    message=f"Failed to retry call: {error_message}"
+                ))
+
+                logger.error(f"Failed to retry call {original_call_sid}: {error_message}")
+
+        response = CallRetryResponse(
+            total_attempted=len(calls_to_retry),
+            successful_retries=successful_retries,
+            failed_retries=failed_retries,
+            results=results
+        )
+
+        logger.info(f"Retry operation completed: {successful_retries} successful, {failed_retries} failed")
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error during call retry: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retry calls: {str(e)}"
+        )
 
 
 # ============================================================================
