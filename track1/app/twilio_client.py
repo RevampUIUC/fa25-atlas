@@ -264,6 +264,7 @@ class TwilioClient:
         self,
         script: Optional[str] = None,
         record_call: bool = True,
+        enable_streaming: bool = True,
     ) -> str:
         """
         Generate TwiML response for voice calls with consent message
@@ -271,11 +272,18 @@ class TwilioClient:
         Args:
             script: Text to speak (speech synthesis)
             record_call: Whether to record the call
+            enable_streaming: Whether to enable real-time audio streaming (default: True)
 
         Returns:
             TwiML response as string
         """
         response = VoiceResponse()
+
+        # Start media stream for real-time transcription if enabled
+        if enable_streaming:
+            # Use wss:// for secure WebSocket (or ws:// for development)
+            stream_url = f"{self.base_url.replace('http://', 'ws://').replace('https://', 'wss://')}/twilio/stream"
+            response.start().stream(url=stream_url)
 
         # Client-approved consent message
         consent_message = (
