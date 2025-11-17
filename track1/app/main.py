@@ -2,7 +2,7 @@ import os
 import logging
 from datetime import datetime
 from typing import Optional
-from fastapi import FastAPI, HTTPException, Query, BackgroundTasks, Request
+from fastapi import FastAPI, HTTPException, Query, BackgroundTasks, Request, WebSocket
 from fastapi.responses import Response, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
@@ -64,12 +64,13 @@ app.add_middleware(
 # Global instances
 db: Optional[MongoDatabase] = None
 twilio_client: Optional[TwilioClient] = None
+media_stream_handler = None
 
 
 @app.on_event("startup")
 async def startup_event():
     """Initialize database and Twilio client on startup"""
-    global db, twilio_client
+    global db, twilio_client, media_stream_handler
 
     try:
         db = MongoDatabase(
@@ -92,6 +93,15 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Failed to initialize Twilio client: {str(e)}")
         raise
+
+    try:
+        from app.media_stream_handler import TwilioMediaStreamHandler
+        media_stream_handler = TwilioMediaStreamHandler(db=db)
+        logger.info("Media stream handler initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize media stream handler: {str(e)}")
+        # Don't raise - this is optional functionality
+        logger.warning("Deepgram transcription will not be available")
 
 
 @app.on_event("shutdown")
@@ -788,6 +798,29 @@ async def handle_recording_callback(
     except Exception as e:
         logger.error(f"Failed to handle recording callback: {str(e)}")
         return {"status": "ok"}  # Always return OK to prevent Twilio retries
+
+
+@app.websocket("/twilio/stream")
+async def handle_media_stream(websocket: WebSocket):
+    """
+    Handle Twilio Media Streams WebSocket connection
+    Receives real-time audio and sends to Deepgram for transcription
+
+    This endpoint receives mulaw-encoded audio at 8kHz from Twilio
+    and forwards it to Deepgram for real-time speech-to-text transcription
+    """
+    try:
+        if media_stream_handler:
+            await media_stream_handler.handle_connection(websocket)
+        else:
+            logger.error("Media stream handler not initialized")
+            await websocket.close(code=1011, reason="Transcription service unavailable")
+    except Exception as e:
+        logger.error(f"Error in media stream endpoint: {str(e)}")
+        try:
+            await websocket.close(code=1011, reason="Internal server error")
+        except:
+            pass
 
 
 @app.post("/twilio/retry", response_model=CallRetryResponse)
