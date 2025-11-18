@@ -1,0 +1,250 @@
+{
+  "info": {
+    "name": "Atlas - Twilio Call Management API",
+    "description": "Complete API testing collection for Atlas",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000",
+      "type": "string"
+    },
+    {
+      "key": "user_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "call_sid",
+      "value": "CA1234567890abcdef1234567890abcdef",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/health",
+          "host": ["{{base_url}}"],
+          "path": ["health"]
+        },
+        "description": "Check API health status"
+      }
+    },
+    {
+      "name": "2. Create User",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "if (pm.response.code === 200) {",
+              "    var jsonData = pm.response.json();",
+              "    pm.collectionVariables.set('user_id', jsonData.id);",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Test User\",\n  \"email\": \"test@example.com\",\n  \"phone_number\": \"+15551234567\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/users",
+          "host": ["{{base_url}}"],
+          "path": ["users"]
+        },
+        "description": "Create a new user"
+      }
+    },
+    {
+      "name": "3. Get User",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/users/{{user_id}}",
+          "host": ["{{base_url}}"],
+          "path": ["users", "{{user_id}}"]
+        },
+        "description": "Retrieve user by ID"
+      }
+    },
+    {
+      "name": "4. Make Outbound Call",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"to\": \"+15551234567\",\n  \"user_external_id\": \"{{user_id}}\",\n  \"script\": \"Hello! This is a test call from Atlas.\",\n  \"recording_enabled\": true\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/calls/outbound",
+          "host": ["{{base_url}}"],
+          "path": ["calls", "outbound"]
+        },
+        "description": "Initiate an outbound call"
+      }
+    },
+    {
+      "name": "5. Webhook - Status (Initiated)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/x-www-form-urlencoded"
+          }
+        ],
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            {"key": "CallSid", "value": "{{call_sid}}"},
+            {"key": "CallStatus", "value": "initiated"},
+            {"key": "To", "value": "+15551234567"},
+            {"key": "From", "value": "+15559876543"},
+            {"key": "Direction", "value": "outbound-api"},
+            {"key": "ApiVersion", "value": "2010-04-01"},
+            {"key": "AccountSid", "value": "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}
+          ]
+        },
+        "url": {
+          "raw": "{{base_url}}/twilio/status",
+          "host": ["{{base_url}}"],
+          "path": ["twilio", "status"]
+        },
+        "description": "Simulate Twilio status webhook - initiated"
+      }
+    },
+    {
+      "name": "6. Webhook - Status (Ringing)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/x-www-form-urlencoded"
+          }
+        ],
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            {"key": "CallSid", "value": "{{call_sid}}"},
+            {"key": "CallStatus", "value": "ringing"},
+            {"key": "To", "value": "+15551234567"},
+            {"key": "From", "value": "+15559876543"},
+            {"key": "Direction", "value": "outbound-api"}
+          ]
+        },
+        "url": {
+          "raw": "{{base_url}}/twilio/status",
+          "host": ["{{base_url}}"],
+          "path": ["twilio", "status"]
+        },
+        "description": "Simulate Twilio status webhook - ringing"
+      }
+    },
+    {
+      "name": "7. Webhook - Status (In-Progress)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/x-www-form-urlencoded"
+          }
+        ],
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            {"key": "CallSid", "value": "{{call_sid}}"},
+            {"key": "CallStatus", "value": "in-progress"},
+            {"key": "To", "value": "+15551234567"},
+            {"key": "From", "value": "+15559876543"}
+          ]
+        },
+        "url": {
+          "raw": "{{base_url}}/twilio/status",
+          "host": ["{{base_url}}"],
+          "path": ["twilio", "status"]
+        },
+        "description": "Simulate Twilio status webhook - in-progress"
+      }
+    },
+    {
+      "name": "8. Webhook - Recording",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/x-www-form-urlencoded"
+          }
+        ],
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            {"key": "RecordingSid", "value": "RE1234567890abcdef1234567890abcdef"},
+            {"key": "RecordingUrl", "value": "https://api.twilio.com/2010-04-01/Accounts/ACxxxx/Recordings/RExxxx"},
+            {"key": "RecordingStatus", "value": "completed"},
+            {"key": "CallSid", "value": "{{call_sid}}"},
+            {"key": "RecordingDuration", "value": "45"}
+          ]
+        },
+        "url": {
+          "raw": "{{base_url}}/twilio/recording",
+          "host": ["{{base_url}}"],
+          "path": ["twilio", "recording"]
+        },
+        "description": "Simulate Twilio recording webhook"
+      }
+    },
+    {
+      "name": "9. Webhook - Status (Completed)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/x-www-form-urlencoded"
+          }
+        ],
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            {"key": "CallSid", "value": "{{call_sid}}"},
+            {"key": "CallStatus", "value": "completed"},
+            {"key": "To", "value": "+15551234567"},
+            {"key": "From", "value": "+15559876543"},
+            {"key": "Duration", "value": "45"}
+          ]
+        },
+        "url": {
+          "raw": "{{base_url}}/twilio/status",
+          "host": ["{{base_url}}"],
+          "path": ["twilio", "status"]
+        },
+        "description": "Simulate Twilio status webhook - completed"
+      }
+    }
+  ]
+}

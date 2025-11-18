@@ -137,6 +137,7 @@ class CallFeedbackResponse(BaseModel):
         from_attributes = True
 
 
+<<<<<<< HEAD
 class CallRetryRequest(BaseModel):
     """Request to retry failed calls"""
     call_sid: Optional[str] = Field(None, description="Specific call SID to retry (optional)")
@@ -163,3 +164,86 @@ class CallRetryResponse(BaseModel):
     successful_retries: int
     failed_retries: int
     results: List[CallRetryResult]
+=======
+class CallAttempt(BaseModel):
+    attempt_number: int
+    twilio_sid: str
+    status: str
+    timestamp: datetime
+    error_message: Optional[str] = None
+
+class CallBase(BaseModel):
+    user_id: str = Field(..., description="User ID who made the call")
+    to: str = Field(..., min_length=10, description="Destination phone number")
+    from_number: str = Field(..., description="Twilio phone number")
+    twilio_sid: str = Field(..., description="Twilio Call SID")
+    status: str = "initiated"
+    script: Optional[str] = None
+    recording_enabled: bool = False
+    
+    # RETRY FIELDS
+    attempt_count: int = 1
+    max_attempts: int = 3
+    should_retry: bool = False
+    next_retry_at: Optional[datetime] = None
+    attempts: List[CallAttempt] = []
+
+class CallCreate(CallBase):
+    pass
+
+class Call(CallBase):
+    id: str
+    created_at: datetime
+    updated_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+
+# ============================================================================
+# Week 3: Transcription Models
+# ============================================================================
+
+class TranscriptWord(BaseModel):
+    """Word-level timestamp from Deepgram"""
+    word: str
+    start: float = Field(..., description="Start time in seconds")
+    end: float = Field(..., description="End time in seconds")
+    confidence: float = Field(..., ge=0, le=1, description="Confidence score")
+
+
+class TranscriptBase(BaseModel):
+    """Real-time transcript from Deepgram"""
+    call_sid: str = Field(..., description="Twilio Call SID")
+    stream_sid: Optional[str] = Field(None, description="Twilio Stream SID")
+    transcript: str = Field(..., description="Transcribed text")
+    is_final: bool = Field(default=True, description="Is final transcript")
+    speech_final: bool = Field(default=False, description="Speech segment complete")
+    words: List[TranscriptWord] = Field(default=[], description="Word-level timestamps")
+    call_offset_seconds: float = Field(..., description="Offset from call start")
+    absolute_timestamp: datetime = Field(..., description="Absolute timestamp")
+    speaker: Optional[str] = Field(None, description="Speaker identification")
+
+
+class TranscriptCreate(TranscriptBase):
+    pass
+
+
+class Transcript(TranscriptBase):
+    id: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class TranscriptResponse(BaseModel):
+    """Response with timestamped transcript"""
+    call_sid: str
+    total_transcripts: int
+    duration_seconds: float
+    transcripts: List[Transcript]
+
+    class Config:
+        from_attributes = True        
+>>>>>>> eee2df5dce74226cdfba8c75cdad18e53625f15a

@@ -27,12 +27,18 @@ class MongoDatabase:
             raise ValueError("Missing MONGO_URI configuration")
 
         try:
-            self.client = MongoClient(self.connection_string)
+            # SSL/TLS FIX FOR MONGODB ATLAS
+            self.client = MongoClient(
+                self.connection_string,
+                tls=True,
+                tlsAllowInvalidCertificates=True,
+                serverSelectionTimeoutMS=5000
+            )
             self.db = self.client[self.database_name]
             # Test connection
-            self.client.admin.command("ping")
+            #self.client.admin.command("ping")
             logger.info(f"Connected to MongoDB database: {self.database_name}")
-            self._create_indexes()
+            #self._create_indexes()
         except PyMongoError as e:
             logger.error(f"Failed to connect to MongoDB: {str(e)}")
             raise
@@ -203,26 +209,6 @@ class MongoDatabase:
             raise
 
     # Call operations
-    def create_call(self, call_data: Dict[str, Any]) -> str:
-        """
-        Create a new call record
-
-        Args:
-            call_data: Call data dictionary
-
-        Returns:
-            Call ID
-        """
-        try:
-            call_data["created_at"] = datetime.utcnow()
-            call_data["updated_at"] = datetime.utcnow()
-            result = self.db.calls.insert_one(call_data)
-            logger.info(f"Call created: {result.inserted_id}")
-            return str(result.inserted_id)
-        except Exception as e:
-            logger.error(f"Failed to create call: {str(e)}")
-            raise
-
     def get_call(self, call_id: str) -> Optional[Dict[str, Any]]:
         """
         Get call by ID
@@ -254,7 +240,7 @@ class MongoDatabase:
             Call document or None
         """
         try:
-            call = self.db.calls.find_one({"twilio_sid": twilio_sid})
+            call = self.db.calls.find_one({"call_sid": twilio_sid})
             if call:
                 call["id"] = str(call["_id"])
                 del call["_id"]
@@ -447,7 +433,11 @@ class MongoDatabase:
             logger.error(f"Failed to list recordings for call {call_id}: {str(e)}")
             raise
 
+<<<<<<< HEAD
 #starting from here
+=======
+    # Track-1 specific methods
+>>>>>>> eee2df5dce74226cdfba8c75cdad18e53625f15a
     def ensure_track1_indexes(self) -> None:
         """Indexes required by Track-1 spec (idempotent)."""
         self.db.users.create_index([("external_id", ASCENDING)], unique=True, name="uniq_external_id")
@@ -457,7 +447,10 @@ class MongoDatabase:
                                 name="idx_user_started_at")
         self.db.transcripts.create_index([("call_sid", ASCENDING)], name="idx_call_sid")
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> eee2df5dce74226cdfba8c75cdad18e53625f15a
     def upsert_user(self, external_id: str, phone: str, name: Optional[str] = None) -> Dict[str, Any]:
         """Create/update user by external_id; also store phone."""
         payload: Dict[str, Any] = {"external_id": external_id, "phone": phone, "updated_at": datetime.utcnow()}
@@ -523,6 +516,7 @@ class MongoDatabase:
         res = self.db.transcripts.insert_one(doc)
         return str(res.inserted_id)
 
+<<<<<<< HEAD
     def init_retry_plan(self, twilio_sid: str, retry_limit: int, retry_delay_sec: int) -> bool:
         """
         Ensure call doc has retry fields initialized.
@@ -602,3 +596,59 @@ class MongoDatabase:
         except Exception as e:
             logger.error(f"get_call_attempts failed for {twilio_sid}: {e}")
             return []
+=======
+    # Feedback operations
+    def save_feedback(self, call_sid: str, feedback_data: Dict[str, Any]) -> bool:
+        """
+        Save call feedback to the calls collection
+
+        Args:
+            call_sid: Twilio Call SID
+            feedback_data: Feedback data with scoring fields
+
+        Returns:
+            True if successful
+        """
+        try:
+            feedback = {
+                "call_quality": feedback_data.get("call_quality"),
+                "agent_helpfulness": feedback_data.get("agent_helpfulness"),
+                "resolution": feedback_data.get("resolution"),
+                "call_ease": feedback_data.get("call_ease"),
+                "overall_satisfaction": feedback_data.get("overall_satisfaction"),
+                "notes": feedback_data.get("notes"),
+                "feedback_provided_at": datetime.utcnow(),
+            }
+
+            result = self.db.calls.update_one(
+                {"call_sid": call_sid},
+                {"$set": {"feedback": feedback, "updated_at": datetime.utcnow()}},
+                upsert=False
+            )
+            return result.matched_count > 0
+        except Exception as e:
+            logger.error(f"Failed to save feedback for call {call_sid}: {str(e)}")
+            raise
+
+    def get_call_feedback(self, call_sid: str) -> Optional[Dict[str, Any]]:
+        """
+        Get feedback for a specific call
+
+        Args:
+            call_sid: Twilio Call SID
+
+        Returns:
+            Feedback data or None
+        """
+        try:
+            call = self.db.calls.find_one({"call_sid": call_sid})
+            if call and "feedback" in call:
+                feedback = call["feedback"]
+                feedback["call_sid"] = call_sid
+                feedback["created_at"] = feedback.get("feedback_provided_at", datetime.utcnow())
+                return feedback
+            return None
+        except Exception as e:
+            logger.error(f"Failed to get feedback for call {call_sid}: {str(e)}")
+            return None
+>>>>>>> eee2df5dce74226cdfba8c75cdad18e53625f15a

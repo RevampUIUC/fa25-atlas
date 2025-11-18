@@ -1,0 +1,346 @@
+{
+  "info": {
+    "name": "Track1-Week2 Retry Testing",
+    "description": "Collection for testing call retry logic with attempt tracking",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "user_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "call_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "twilio_sid",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Create Outbound Call",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "// Test: Expect 200 status",
+              "pm.test(\"Status code is 200\", function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "// Test: Response has twilio_sid",
+              "pm.test(\"Response contains twilio_sid\", function () {",
+              "    const jsonData = pm.response.json();",
+              "    pm.expect(jsonData).to.have.property('twilio_sid');",
+              "    pm.expect(jsonData.twilio_sid).to.be.a('string');",
+              "    pm.expect(jsonData.twilio_sid.length).to.be.greaterThan(0);",
+              "    ",
+              "    // Save for later requests",
+              "    pm.collectionVariables.set('twilio_sid', jsonData.twilio_sid);",
+              "    pm.collectionVariables.set('call_id', jsonData.call_id);",
+              "    pm.collectionVariables.set('user_id', jsonData.user_id);",
+              "});",
+              "",
+              "// Test: Initial attempt_count is 1",
+              "pm.test(\"Initial attempt_count is 1\", function () {",
+              "    const jsonData = pm.response.json();",
+              "    pm.expect(jsonData.attempt_count).to.equal(1);",
+              "});",
+              "",
+              "// Test: Response structure",
+              "pm.test(\"Response has required fields\", function () {",
+              "    const jsonData = pm.response.json();",
+              "    pm.expect(jsonData).to.have.property('call_id');",
+              "    pm.expect(jsonData).to.have.property('user_id');",
+              "    pm.expect(jsonData).to.have.property('status');",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"to\": \"+15555551234\",\n  \"from\": \"+15555556789\",\n  \"user_id\": \"test_user_123\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/calls/outbound",
+          "host": ["{{base_url}}"],
+          "path": ["calls", "outbound"]
+        }
+      }
+    },
+    {
+      "name": "2. Simulate Twilio Status - Busy",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "// Test: Expect status ok response",
+              "pm.test(\"Status is ok\", function () {",
+              "    const jsonData = pm.response.json();",
+              "    pm.expect(jsonData).to.have.property('status');",
+              "    pm.expect(jsonData.status).to.equal('ok');",
+              "});",
+              "",
+              "// Test: 200 status code",
+              "pm.test(\"Status code is 200\", function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "// Wait for retry job to process",
+              "setTimeout(function(){}, 2000);"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"CallSid\": \"{{twilio_sid}}\",\n  \"CallStatus\": \"busy\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/twilio/status",
+          "host": ["{{base_url}}"],
+          "path": ["twilio", "status"]
+        }
+      }
+    },
+    {
+      "name": "3. Check Call Attempts - After First Retry",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "// Test: Response structure",
+              "pm.test(\"Call data returned\", function () {",
+              "    pm.response.to.have.status(200);",
+              "    const jsonData = pm.response.json();",
+              "    pm.expect(jsonData).to.have.property('attempts');",
+              "    pm.expect(jsonData).to.have.property('attempt_count');",
+              "});",
+              "",
+              "// Test: Attempt count incremented",
+              "pm.test(\"Attempt count is 2 after first retry\", function () {",
+              "    const jsonData = pm.response.json();",
+              "    pm.expect(jsonData.attempt_count).to.be.at.least(2);",
+              "});",
+              "",
+              "// Test: Attempts array has entries",
+              "pm.test(\"Attempts array has multiple entries\", function () {",
+              "    const jsonData = pm.response.json();",
+              "    pm.expect(jsonData.attempts).to.be.an('array');",
+              "    pm.expect(jsonData.attempts.length).to.be.at.least(2);",
+              "});",
+              "",
+              "// Test: First attempt has correct status",
+              "pm.test(\"First attempt marked as busy\", function () {",
+              "    const jsonData = pm.response.json();",
+              "    const firstAttempt = jsonData.attempts[0];",
+              "    pm.expect(firstAttempt.status).to.equal('busy');",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/users/{{user_id}}/calls/{{call_id}}",
+          "host": ["{{base_url}}"],
+          "path": ["users", "{{user_id}}", "calls", "{{call_id}}"]
+        }
+      }
+    },
+    {
+      "name": "4. Simulate Second Retry - No Answer",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Status is ok\", function () {",
+              "    const jsonData = pm.response.json();",
+              "    pm.expect(jsonData.status).to.equal('ok');",
+              "});",
+              "",
+              "setTimeout(function(){}, 2000);"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"CallSid\": \"{{twilio_sid}}\",\n  \"CallStatus\": \"no-answer\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/twilio/status",
+          "host": ["{{base_url}}"],
+          "path": ["twilio", "status"]
+        }
+      }
+    },
+    {
+      "name": "5. Check Call Attempts - After Second Retry",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Attempt count is 3 after second retry\", function () {",
+              "    const jsonData = pm.response.json();",
+              "    pm.expect(jsonData.attempt_count).to.be.at.least(3);",
+              "});",
+              "",
+              "pm.test(\"Has three attempts in array\", function () {",
+              "    const jsonData = pm.response.json();",
+              "    pm.expect(jsonData.attempts.length).to.be.at.least(3);",
+              "});",
+              "",
+              "pm.test(\"Second attempt marked as no-answer\", function () {",
+              "    const jsonData = pm.response.json();",
+              "    const secondAttempt = jsonData.attempts[1];",
+              "    pm.expect(secondAttempt.status).to.equal('no-answer');",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/users/{{user_id}}/calls/{{call_id}}",
+          "host": ["{{base_url}}"],
+          "path": ["users", "{{user_id}}", "calls", "{{call_id}}"]
+        }
+      }
+    },
+    {
+      "name": "6. Simulate Third Retry - Completed",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Status is ok\", function () {",
+              "    const jsonData = pm.response.json();",
+              "    pm.expect(jsonData.status).to.equal('ok');",
+              "});",
+              "",
+              "setTimeout(function(){}, 1000);"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"CallSid\": \"{{twilio_sid}}\",\n  \"CallStatus\": \"completed\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/twilio/status",
+          "host": ["{{base_url}}"],
+          "path": ["twilio", "status"]
+        }
+      }
+    },
+    {
+      "name": "7. Final Check - Call Completed",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Final status is completed\", function () {",
+              "    const jsonData = pm.response.json();",
+              "    pm.expect(jsonData.status).to.equal('completed');",
+              "});",
+              "",
+              "pm.test(\"No more retries scheduled\", function () {",
+              "    const jsonData = pm.response.json();",
+              "    pm.expect(jsonData.should_retry).to.equal(false);",
+              "});",
+              "",
+              "pm.test(\"Final attempt count is 3\", function () {",
+              "    const jsonData = pm.response.json();",
+              "    pm.expect(jsonData.attempt_count).to.equal(3);",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/users/{{user_id}}/calls/{{call_id}}",
+          "host": ["{{base_url}}"],
+          "path": ["users", "{{user_id}}", "calls", "{{call_id}}"]
+        }
+      }
+    },
+    {
+      "name": "Debug - Get All Calls for User",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/users/{{user_id}}/calls",
+          "host": ["{{base_url}}"],
+          "path": ["users", "{{user_id}}", "calls"]
+        }
+      }
+    }
+  ]
+}
