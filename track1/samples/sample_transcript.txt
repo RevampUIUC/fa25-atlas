@@ -1,0 +1,37 @@
+# Call Transcript - CA1234567890abcdef1234567890abcdef
+# Date: 2025-01-10 14:20:00
+# Duration: 5m 30s
+# User: John Doe (+15551234567)
+
+[14:20:05] SYSTEM: This call may be recorded for quality assurance and training purposes. By remaining on the line, you consent to this recording. If you do not consent, please hang up now.
+
+[14:20:18] SYSTEM: Thank you for answering. Please leave a message after the beep.
+
+[14:20:22] CALLER: Hello, I need help with my account.
+
+[14:20:28] CALLER: I've been trying to reset my password but I keep getting an error message.
+
+[14:20:35] CALLER: The error says my email address is not recognized.
+
+[14:20:40] CALLER: My email is john.doe@example.com.
+
+[14:20:45] CALLER: I signed up about three months ago.
+
+[14:20:50] CALLER: And I was able to log in fine until last week.
+
+[14:20:57] CALLER: I've checked my spam folder and I'm not receiving the password reset emails either.
+
+[14:21:05] CALLER: Can someone please call me back at this number to help resolve this issue?
+
+[14:21:12] CALLER: My account number is 1234567890 if that helps.
+
+[14:21:18] CALLER: Thank you for your help. I look forward to hearing from you soon.
+
+---
+Transcript Statistics:
+- Total Utterances: 12
+- Total Words: 145
+- Average Confidence: 0.96
+- Languages: en-US
+- Speakers: system, caller
+- Topics: account, password reset, email, technical support

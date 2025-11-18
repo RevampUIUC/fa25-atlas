@@ -34,6 +34,7 @@ from app.twilio_client import (
     TwilioPermissionError,
     TwilioResourceError,
 )
+from app.transcript_schema import initialize_transcript_collection
 
 # Load environment variables
 load_dotenv()
@@ -78,6 +79,15 @@ async def startup_event():
         )
         db.ensure_track1_indexes()
         logger.info("Database initialized successfully")
+
+        # Initialize transcript collection with schema validation and indexes
+        try:
+            initialize_transcript_collection(db.db)
+            logger.info("Transcript collection initialized with schema validation and indexes")
+        except Exception as transcript_error:
+            logger.warning(f"Failed to initialize transcript collection: {str(transcript_error)}")
+            # Don't fail startup if transcript initialization fails
+
     except Exception as e:
         logger.error(f"Failed to initialize database: {str(e)}")
         raise
