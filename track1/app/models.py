@@ -137,7 +137,6 @@ class CallFeedbackResponse(BaseModel):
         from_attributes = True
 
 
-<<<<<<< HEAD
 class CallRetryRequest(BaseModel):
     """Request to retry failed calls"""
     call_sid: Optional[str] = Field(None, description="Specific call SID to retry (optional)")
@@ -164,13 +163,15 @@ class CallRetryResponse(BaseModel):
     successful_retries: int
     failed_retries: int
     results: List[CallRetryResult]
-=======
+
+
 class CallAttempt(BaseModel):
     attempt_number: int
     twilio_sid: str
     status: str
     timestamp: datetime
     error_message: Optional[str] = None
+
 
 class CallBase(BaseModel):
     user_id: str = Field(..., description="User ID who made the call")
@@ -180,7 +181,7 @@ class CallBase(BaseModel):
     status: str = "initiated"
     script: Optional[str] = None
     recording_enabled: bool = False
-    
+
     # RETRY FIELDS
     attempt_count: int = 1
     max_attempts: int = 3
@@ -188,14 +189,16 @@ class CallBase(BaseModel):
     next_retry_at: Optional[datetime] = None
     attempts: List[CallAttempt] = []
 
+
 class CallCreate(CallBase):
     pass
+
 
 class Call(CallBase):
     id: str
     created_at: datetime
     updated_at: datetime
-    
+
     class Config:
         from_attributes = True
 
@@ -245,5 +248,4 @@ class TranscriptResponse(BaseModel):
     transcripts: List[Transcript]
 
     class Config:
-        from_attributes = True        
->>>>>>> eee2df5dce74226cdfba8c75cdad18e53625f15a
+        from_attributes = True
