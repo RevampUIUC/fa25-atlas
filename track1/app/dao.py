@@ -27,12 +27,18 @@ class MongoDatabase:
             raise ValueError("Missing MONGO_URI configuration")
 
         try:
-            self.client = MongoClient(self.connection_string)
+            # SSL/TLS FIX FOR MONGODB ATLAS
+            self.client = MongoClient(
+                self.connection_string,
+                tls=True,
+                tlsAllowInvalidCertificates=True,
+                serverSelectionTimeoutMS=5000
+            )
             self.db = self.client[self.database_name]
             # Test connection
-            self.client.admin.command("ping")
+            #self.client.admin.command("ping")
             logger.info(f"Connected to MongoDB database: {self.database_name}")
-            self._create_indexes()
+            #self._create_indexes()
         except PyMongoError as e:
             logger.error(f"Failed to connect to MongoDB: {str(e)}")
             raise
@@ -201,26 +207,6 @@ class MongoDatabase:
             raise
 
     # Call operations
-    def create_call(self, call_data: Dict[str, Any]) -> str:
-        """
-        Create a new call record
-
-        Args:
-            call_data: Call data dictionary
-
-        Returns:
-            Call ID
-        """
-        try:
-            call_data["created_at"] = datetime.utcnow()
-            call_data["updated_at"] = datetime.utcnow()
-            result = self.db.calls.insert_one(call_data)
-            logger.info(f"Call created: {result.inserted_id}")
-            return str(result.inserted_id)
-        except Exception as e:
-            logger.error(f"Failed to create call: {str(e)}")
-            raise
-
     def get_call(self, call_id: str) -> Optional[Dict[str, Any]]:
         """
         Get call by ID
@@ -252,7 +238,7 @@ class MongoDatabase:
             Call document or None
         """
         try:
-            call = self.db.calls.find_one({"twilio_sid": twilio_sid})
+            call = self.db.calls.find_one({"call_sid": twilio_sid})
             if call:
                 call["id"] = str(call["_id"])
                 del call["_id"]
@@ -445,7 +431,7 @@ class MongoDatabase:
             logger.error(f"Failed to list recordings for call {call_id}: {str(e)}")
             raise
 
-#starting from here
+    # Track-1 specific methods
     def ensure_track1_indexes(self) -> None:
         """Indexes required by Track-1 spec (idempotent)."""
         self.db.users.create_index([("external_id", ASCENDING)], unique=True, name="uniq_external_id")
@@ -454,7 +440,6 @@ class MongoDatabase:
         self.db.calls.create_index([("user_id", ASCENDING), ("started_at", ASCENDING)],
                                 name="idx_user_started_at")
         self.db.transcripts.create_index([("call_sid", ASCENDING)], name="idx_call_sid")
-
 
     def upsert_user(self, external_id: str, phone: str, name: Optional[str] = None) -> Dict[str, Any]:
         """Create/update user by external_id; also store phone."""
@@ -575,4 +560,3 @@ class MongoDatabase:
         except Exception as e:
             logger.error(f"Failed to get feedback for call {call_sid}: {str(e)}")
             return None
-

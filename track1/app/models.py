@@ -170,3 +170,51 @@ class Call(CallBase):
     
     class Config:
         from_attributes = True
+
+
+# ============================================================================
+# Week 3: Transcription Models
+# ============================================================================
+
+class TranscriptWord(BaseModel):
+    """Word-level timestamp from Deepgram"""
+    word: str
+    start: float = Field(..., description="Start time in seconds")
+    end: float = Field(..., description="End time in seconds")
+    confidence: float = Field(..., ge=0, le=1, description="Confidence score")
+
+
+class TranscriptBase(BaseModel):
+    """Real-time transcript from Deepgram"""
+    call_sid: str = Field(..., description="Twilio Call SID")
+    stream_sid: Optional[str] = Field(None, description="Twilio Stream SID")
+    transcript: str = Field(..., description="Transcribed text")
+    is_final: bool = Field(default=True, description="Is final transcript")
+    speech_final: bool = Field(default=False, description="Speech segment complete")
+    words: List[TranscriptWord] = Field(default=[], description="Word-level timestamps")
+    call_offset_seconds: float = Field(..., description="Offset from call start")
+    absolute_timestamp: datetime = Field(..., description="Absolute timestamp")
+    speaker: Optional[str] = Field(None, description="Speaker identification")
+
+
+class TranscriptCreate(TranscriptBase):
+    pass
+
+
+class Transcript(TranscriptBase):
+    id: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class TranscriptResponse(BaseModel):
+    """Response with timestamped transcript"""
+    call_sid: str
+    total_transcripts: int
+    duration_seconds: float
+    transcripts: List[Transcript]
+
+    class Config:
+        from_attributes = True        

@@ -1,7 +1,7 @@
 import os
 import logging
 from twilio.rest import Client
-from twilio.twiml.voice_response import VoiceResponse
+from twilio.twiml.voice_response import VoiceResponse, Connect, Stream
 from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
@@ -58,7 +58,7 @@ class TwilioClient:
         """
         try:
             # Build the URL to fetch TwiML from our voice endpoint
-            voice_url = f"{self.base_url}/twilio/voice?call_id={call_id}"
+            voice_url = f"{self.base_url}/twilio/voice?call_id={call_id}&streaming=true"
 
             # Add recording parameter if enabled
             if recording_enabled:
@@ -110,18 +110,37 @@ class TwilioClient:
         self,
         script: Optional[str] = None,
         record_call: bool = True,
+        enable_streaming: bool = True,
+        call_id: str = None,
     ) -> str:
         """
-        Generate TwiML response for voice calls with consent message
+        Generate TwiML response for voice calls with media streaming (Week 3)
 
         Args:
             script: Text to speak (speech synthesis)
             record_call: Whether to record the call
+            enable_streaming: Enable real-time media streaming for transcription
+            call_id: Call ID for streaming identification
 
         Returns:
             TwiML response as string
         """
         response = VoiceResponse()
+
+        # Week 3: Start media streaming for real-time transcription
+        if enable_streaming and call_id:
+            # Determine WebSocket URL based on base_url protocol
+            ws_url = self.base_url.replace('https://', 'wss://').replace('http://', 'ws://')
+            stream_url = f"{ws_url}/twilio/media-stream"
+            
+            # Connect to WebSocket for real-time audio streaming
+            connect = Connect()
+            stream = Stream(url=stream_url)
+            stream.parameter(name="call_id", value=call_id)
+            connect.append(stream)
+            response.append(connect)
+            
+            logger.info(f"Media streaming enabled for call {call_id} at {stream_url}")
 
         # Client-approved consent message
         consent_message = (
