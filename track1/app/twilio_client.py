@@ -180,6 +180,7 @@ class TwilioClient:
         call_id: str,
         script: Optional[str] = None,
         recording_enabled: bool = True,
+        machine_detection: bool = True,
     ) -> Dict[str, Any]:
         """
         Initiate an outbound call
@@ -189,6 +190,7 @@ class TwilioClient:
             call_id: Unique call identifier
             script: Optional TwiML script or URL
             recording_enabled: Whether to record the call
+            machine_detection: Enable answering machine detection (AMD)
 
         Returns:
             Dict with call_sid and status
@@ -207,16 +209,29 @@ class TwilioClient:
             if recording_enabled:
                 voice_url += "&recording=true"
 
-            call = self.client.calls.create(
-                to=to_number,
-                from_=self.from_number,
-                url=voice_url,
-                status_callback=f"{self.base_url}/twilio/status",
-                status_callback_event=["initiated", "ringing", "answered", "completed"],
-                status_callback_method="POST",
-            )
+            # Configure call parameters
+            call_params = {
+                "to": to_number,
+                "from_": self.from_number,
+                "url": voice_url,
+                "status_callback": f"{self.base_url}/twilio/status",
+                "status_callback_event": ["initiated", "ringing", "answered", "completed"],
+                "status_callback_method": "POST",
+            }
 
-            logger.info(f"Outbound call initiated: {call.sid} to {to_number}")
+            # Enable Answering Machine Detection (AMD) if requested
+            if machine_detection:
+                call_params.update({
+                    "machine_detection": "DetectMessageEnd",  # or "Enable" for faster detection
+                    "machine_detection_timeout": 30,  # seconds to wait for detection
+                    "machine_detection_speech_threshold": 2400,  # ms of speech to detect machine
+                    "machine_detection_speech_end_threshold": 1200,  # ms of silence after speech
+                    "machine_detection_silence_timeout": 5000,  # ms of silence before giving up
+                })
+
+            call = self.client.calls.create(**call_params)
+
+            logger.info(f"Outbound call initiated: {call.sid} to {to_number} (AMD: {machine_detection})")
             return {"call_sid": call.sid, "status": "initiated"}
 
         except (TwilioError, TwilioValidationError, TwilioRateLimitError,
