@@ -35,6 +35,8 @@ from app.twilio_client import (
     TwilioResourceError,
 )
 from app.transcript_schema import initialize_transcript_collection
+from app.voicemail_detector import VoicemailDetector
+from app.transcript_utils import TranscriptQuery
 
 # Load environment variables
 load_dotenv()
@@ -66,12 +68,13 @@ app.add_middleware(
 db: Optional[MongoDatabase] = None
 twilio_client: Optional[TwilioClient] = None
 media_stream_handler = None
+voicemail_detector: Optional[VoicemailDetector] = None
 
 
 @app.on_event("startup")
 async def startup_event():
     """Initialize database and Twilio client on startup"""
-    global db, twilio_client, media_stream_handler
+    global db, twilio_client, media_stream_handler, voicemail_detector
 
     try:
         db = MongoDatabase(
@@ -112,6 +115,20 @@ async def startup_event():
         logger.error(f"Failed to initialize media stream handler: {str(e)}")
         # Don't raise - this is optional functionality
         logger.warning("Deepgram transcription will not be available")
+
+    # Initialize voicemail detector
+    try:
+        voicemail_detector = VoicemailDetector(
+            amd_confidence_threshold=float(os.getenv("VOICEMAIL_AMD_THRESHOLD", "0.85")),
+            keyword_confidence_threshold=float(os.getenv("VOICEMAIL_KEYWORD_THRESHOLD", "0.75")),
+            min_signals_required=int(os.getenv("VOICEMAIL_MIN_SIGNALS", "1")),
+            enable_aggressive_detection=os.getenv("VOICEMAIL_AGGRESSIVE", "false").lower() == "true"
+        )
+        logger.info("Voicemail detector initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize voicemail detector: {str(e)}")
+        # Don't raise - this is optional functionality
+        logger.warning("Voicemail detection will not be available")
 
 
 @app.on_event("shutdown")
@@ -582,6 +599,80 @@ async def handle_voice_callback(
         )
 
 
+async def run_voicemail_detection(call_sid: str, answered_by: str, call_duration: Optional[int] = None):
+    """
+    Background task to run voicemail detection on a completed call
+
+    Args:
+        call_sid: The Twilio Call SID
+        answered_by: Twilio's answeredBy parameter
+        call_duration: Call duration in seconds
+    """
+    try:
+        if not voicemail_detector:
+            logger.warning(f"Voicemail detector not initialized, skipping detection for {call_sid}")
+            return
+
+        logger.info(f"Running voicemail detection for call: {call_sid}")
+
+        # Get call details
+        call = db.get_call_by_twilio_sid(call_sid)
+        if not call:
+            logger.error(f"Call not found for voicemail detection: {call_sid}")
+            return
+
+        # Get transcripts from database
+        transcripts = None
+        try:
+            transcripts = list(TranscriptQuery.by_call(
+                db.db,
+                call_sid=call_sid,
+                final_only=True  # Only use final transcripts
+            ))
+            logger.info(f"Found {len(transcripts) if transcripts else 0} transcripts for call {call_sid}")
+        except Exception as transcript_error:
+            logger.warning(f"Failed to fetch transcripts for {call_sid}: {str(transcript_error)}")
+            transcripts = None
+
+        # Run detection
+        result = voicemail_detector.analyze_call(
+            call_sid=call_sid,
+            answered_by=answered_by,
+            transcripts=transcripts,
+            call_duration=call_duration,
+            metadata=call.get("metadata", {})
+        )
+
+        # Save detection result to database
+        voicemail_data = {
+            "is_voicemail": result.is_voicemail,
+            "voicemail_confidence": result.confidence,
+            "voicemail_detection_method": result.detection_method,
+            "voicemail_signals": [
+                {
+                    "type": signal.signal_type,
+                    "confidence": signal.confidence,
+                    "detected_at": signal.detected_at.isoformat(),
+                    "details": signal.details
+                }
+                for signal in result.signals
+            ],
+            "voicemail_metadata": result.metadata
+        }
+
+        db.update_call_by_twilio_sid(call_sid, voicemail_data)
+
+        logger.info(
+            f"Voicemail detection completed for {call_sid}: "
+            f"is_voicemail={result.is_voicemail}, "
+            f"confidence={result.confidence:.2f}, "
+            f"method={result.detection_method}"
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to run voicemail detection for {call_sid}: {str(e)}")
+
+
 async def retry_call_background(call_sid: str, max_attempts: int = 3):
     """
     Background task to retry a failed call
@@ -669,14 +760,16 @@ async def handle_status_callback(
     AccountSid: str = None,
     Timestamp: str = None,
     CallDuration: Optional[int] = None,
+    AnsweredBy: str = None,  # AMD result: human, machine_start, machine_end_beep, etc.
 ):
     """
     Handle call status updates from Twilio
     This webhook is called when call status changes
     Automatically enqueues retry tasks for failed calls
+    Captures answeredBy parameter for voicemail detection
     """
     try:
-        logger.info(f"Received status update: CallSid={CallSid}, Status={CallStatus}")
+        logger.info(f"Received status update: CallSid={CallSid}, Status={CallStatus}, AnsweredBy={AnsweredBy}")
 
         # Update call status in database
         call_status_map = {
@@ -700,6 +793,10 @@ async def handle_status_callback(
 
         if Direction:
             update_data["direction"] = Direction
+
+        # Capture answeredBy parameter for voicemail detection
+        if AnsweredBy:
+            update_data["answered_by"] = AnsweredBy
 
         db.update_call_by_twilio_sid(CallSid, update_data)
         # NEW: also set duration/ended_at via Track-1 contract
@@ -744,6 +841,11 @@ async def handle_status_callback(
         if status in retry_statuses:
             logger.info(f"Enqueuing background retry task for call {CallSid} with status {status}")
             background_tasks.add_task(retry_call_background, CallSid, 3)
+
+        # Enqueue voicemail detection for completed calls
+        if CallStatus == "completed" and AnsweredBy:
+            logger.info(f"Enqueuing voicemail detection for call {CallSid}")
+            background_tasks.add_task(run_voicemail_detection, CallSid, AnsweredBy, CallDuration)
 
         return {"status": "ok"}
     except Exception as e:
