@@ -417,3 +417,13 @@ Logs are written to console with timestamps and log levels. Configure via LOG_LE
 - Validate all incoming requests
 - Implement rate limiting for production
 - Use MongoDB connection string with authentication
+
+### Retries & Logging (Track 1)
+- Env:
+  - RETRY_LIMIT (default 3)
+  - RETRY_DELAY (seconds, default 10)
+- Every status update to `/twilio/status` appends an entry to `calls.attempts[]` and increments `attempt_count`.
+- Fields added on `calls`:
+  - attempts: [{ attempt_no, status, reason, at }]
+  - attempt_count, retry_limit, retry_delay_sec
+
