@@ -110,3 +110,111 @@ class CallListResponse(BaseModel):
     page: int
     page_size: int
     data: List[OutboundCallResponse]
+
+
+class CallFeedbackRequest(BaseModel):
+    """Call feedback with five scoring dimensions"""
+    call_quality: int = Field(..., ge=1, le=5, description="Call audio quality (1-5)")
+    agent_helpfulness: int = Field(..., ge=1, le=5, description="Agent helpfulness (1-5)")
+    resolution: int = Field(..., ge=1, le=5, description="Issue resolution (1-5)")
+    call_ease: int = Field(..., ge=1, le=5, description="Ease of call experience (1-5)")
+    overall_satisfaction: int = Field(..., ge=1, le=5, description="Overall satisfaction (1-5)")
+    notes: Optional[str] = Field(None, max_length=2000, description="Optional feedback notes")
+
+
+class CallFeedbackResponse(BaseModel):
+    """Call feedback response"""
+    call_sid: str
+    call_quality: int
+    agent_helpfulness: int
+    resolution: int
+    call_ease: int
+    overall_satisfaction: int
+    notes: Optional[str]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class CallAttempt(BaseModel):
+    attempt_number: int
+    twilio_sid: str
+    status: str
+    timestamp: datetime
+    error_message: Optional[str] = None
+
+class CallBase(BaseModel):
+    user_id: str = Field(..., description="User ID who made the call")
+    to: str = Field(..., min_length=10, description="Destination phone number")
+    from_number: str = Field(..., description="Twilio phone number")
+    twilio_sid: str = Field(..., description="Twilio Call SID")
+    status: str = "initiated"
+    script: Optional[str] = None
+    recording_enabled: bool = False
+    
+    # RETRY FIELDS
+    attempt_count: int = 1
+    max_attempts: int = 3
+    should_retry: bool = False
+    next_retry_at: Optional[datetime] = None
+    attempts: List[CallAttempt] = []
+
+class CallCreate(CallBase):
+    pass
+
+class Call(CallBase):
+    id: str
+    created_at: datetime
+    updated_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+
+# ============================================================================
+# Week 3: Transcription Models
+# ============================================================================
+
+class TranscriptWord(BaseModel):
+    """Word-level timestamp from Deepgram"""
+    word: str
+    start: float = Field(..., description="Start time in seconds")
+    end: float = Field(..., description="End time in seconds")
+    confidence: float = Field(..., ge=0, le=1, description="Confidence score")
+
+
+class TranscriptBase(BaseModel):
+    """Real-time transcript from Deepgram"""
+    call_sid: str = Field(..., description="Twilio Call SID")
+    stream_sid: Optional[str] = Field(None, description="Twilio Stream SID")
+    transcript: str = Field(..., description="Transcribed text")
+    is_final: bool = Field(default=True, description="Is final transcript")
+    speech_final: bool = Field(default=False, description="Speech segment complete")
+    words: List[TranscriptWord] = Field(default=[], description="Word-level timestamps")
+    call_offset_seconds: float = Field(..., description="Offset from call start")
+    absolute_timestamp: datetime = Field(..., description="Absolute timestamp")
+    speaker: Optional[str] = Field(None, description="Speaker identification")
+
+
+class TranscriptCreate(TranscriptBase):
+    pass
+
+
+class Transcript(TranscriptBase):
+    id: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class TranscriptResponse(BaseModel):
+    """Response with timestamped transcript"""
+    call_sid: str
+    total_transcripts: int
+    duration_seconds: float
+    transcripts: List[Transcript]
+
+    class Config:
+        from_attributes = True        

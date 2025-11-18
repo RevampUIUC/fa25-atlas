@@ -1,0 +1,152 @@
+{
+  "description": "Example webhook payloads from Twilio for database testing",
+  
+  "status_webhook_initiated": {
+    "CallSid": "CA1234567890abcdef1234567890abcdef",
+    "CallStatus": "initiated",
+    "To": "+15551234567",
+    "From": "+15559876543",
+    "Direction": "outbound-api",
+    "ApiVersion": "2010-04-01",
+    "AccountSid": "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "Timestamp": "Mon, 04 Nov 2024 12:00:00 +0000",
+    "notes": "Sent when call is first queued"
+  },
+  
+  "status_webhook_ringing": {
+    "CallSid": "CA1234567890abcdef1234567890abcdef",
+    "CallStatus": "ringing",
+    "To": "+15551234567",
+    "From": "+15559876543",
+    "Direction": "outbound-api",
+    "ApiVersion": "2010-04-01",
+    "AccountSid": "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "Timestamp": "Mon, 04 Nov 2024 12:00:05 +0000",
+    "notes": "Sent when phone starts ringing"
+  },
+  
+  "status_webhook_in_progress": {
+    "CallSid": "CA1234567890abcdef1234567890abcdef",
+    "CallStatus": "in-progress",
+    "To": "+15551234567",
+    "From": "+15559876543",
+    "Direction": "outbound-api",
+    "ApiVersion": "2010-04-01",
+    "AccountSid": "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "Timestamp": "Mon, 04 Nov 2024 12:00:10 +0000",
+    "notes": "Sent when call is answered"
+  },
+  
+  "status_webhook_completed": {
+    "CallSid": "CA1234567890abcdef1234567890abcdef",
+    "CallStatus": "completed",
+    "To": "+15551234567",
+    "From": "+15559876543",
+    "Direction": "outbound-api",
+    "CallDuration": "45",
+    "ApiVersion": "2010-04-01",
+    "AccountSid": "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "Timestamp": "Mon, 04 Nov 2024 12:00:55 +0000",
+    "notes": "Sent when call ends"
+  },
+  
+  "status_webhook_failed": {
+    "CallSid": "CA1234567890abcdef1234567890abcdef",
+    "CallStatus": "failed",
+    "To": "+15551234567",
+    "From": "+15559876543",
+    "Direction": "outbound-api",
+    "ApiVersion": "2010-04-01",
+    "AccountSid": "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "Timestamp": "Mon, 04 Nov 2024 12:00:15 +0000",
+    "notes": "Sent when call fails"
+  },
+  
+  "status_webhook_busy": {
+    "CallSid": "CA1234567890abcdef1234567890abcdef",
+    "CallStatus": "busy",
+    "To": "+15551234567",
+    "From": "+15559876543",
+    "Direction": "outbound-api",
+    "ApiVersion": "2010-04-01",
+    "AccountSid": "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "Timestamp": "Mon, 04 Nov 2024 12:00:12 +0000",
+    "notes": "Sent when recipient line is busy"
+  },
+  
+  "status_webhook_no_answer": {
+    "CallSid": "CA1234567890abcdef1234567890abcdef",
+    "CallStatus": "no-answer",
+    "To": "+15551234567",
+    "From": "+15559876543",
+    "Direction": "outbound-api",
+    "ApiVersion": "2010-04-01",
+    "AccountSid": "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "Timestamp": "Mon, 04 Nov 2024 12:00:30 +0000",
+    "notes": "Sent when call times out without answer"
+  },
+  
+  "recording_webhook": {
+    "RecordingSid": "RE1234567890abcdef1234567890abcdef",
+    "RecordingUrl": "https://api.twilio.com/2010-04-01/Accounts/ACxxxx/Recordings/RExxxx",
+    "RecordingStatus": "completed",
+    "RecordingDuration": "45",
+    "CallSid": "CA1234567890abcdef1234567890abcdef",
+    "AccountSid": "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "ApiVersion": "2010-04-01",
+    "TranscriptionText": "Hello, this is a test recording. The call quality was excellent.",
+    "notes": "Sent when recording is ready"
+  },
+  
+  "expected_database_documents": {
+    "calls_collection": {
+      "_id": "ObjectId('507f1f77bcf86cd799439012')",
+      "call_id": "abc-123-def-456",
+      "user_external_id": "507f1f77bcf86cd799439011",
+      "to_number": "+15551234567",
+      "from_number": "+15559876543",
+      "status": "completed",
+      "twilio_status": "completed",
+      "script": "Hello! This is a test call.",
+      "recording_enabled": true,
+      "twilio_sid": "CA1234567890abcdef1234567890abcdef",
+      "call_sid": "CA1234567890abcdef1234567890abcdef",
+      "recording_url": "https://api.twilio.com/2010-04-01/Accounts/ACxxxx/Recordings/RExxxx",
+      "transcription_text": "Hello, this is a test recording. The call quality was excellent.",
+      "duration_sec": 45,
+      "started_at": "2024-11-04T12:00:00Z",
+      "ended_at": "2024-11-04T12:00:45Z",
+      "created_at": "2024-11-04T12:00:00Z",
+      "updated_at": "2024-11-04T12:00:55Z",
+      "feedback": {
+        "call_quality": 5,
+        "agent_helpfulness": 4,
+        "resolution": 5,
+        "call_ease": 4,
+        "overall_satisfaction": 5,
+        "notes": "Great call experience!",
+        "feedback_provided_at": "2024-11-04T12:05:00Z"
+      }
+    },
+    
+    "recordings_collection": {
+      "_id": "ObjectId('507f1f77bcf86cd799439013')",
+      "call_id": "507f1f77bcf86cd799439012",
+      "twilio_sid": "RE1234567890abcdef1234567890abcdef",
+      "recording_url": "https://api.twilio.com/2010-04-01/Accounts/ACxxxx/Recordings/RExxxx",
+      "recording_status": "completed",
+      "status": "completed",
+      "duration": 45,
+      "created_at": "2024-11-04T12:00:50Z"
+    },
+    
+    "transcripts_collection": {
+      "_id": "ObjectId('507f1f77bcf86cd799439014')",
+      "call_sid": "CA1234567890abcdef1234567890abcdef",
+      "speaker": "agent",
+      "text": "Hello, this is a test recording.",
+      "ts": "2024-11-04T12:00:15Z",
+      "created_at": "2024-11-04T12:00:15Z"
+    }
+  }
+}

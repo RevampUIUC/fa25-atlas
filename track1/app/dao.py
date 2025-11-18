@@ -27,12 +27,18 @@ class MongoDatabase:
             raise ValueError("Missing MONGO_URI configuration")
 
         try:
-            self.client = MongoClient(self.connection_string)
+            # SSL/TLS FIX FOR MONGODB ATLAS
+            self.client = MongoClient(
+                self.connection_string,
+                tls=True,
+                tlsAllowInvalidCertificates=True,
+                serverSelectionTimeoutMS=5000
+            )
             self.db = self.client[self.database_name]
             # Test connection
-            self.client.admin.command("ping")
+            #self.client.admin.command("ping")
             logger.info(f"Connected to MongoDB database: {self.database_name}")
-            self._create_indexes()
+            #self._create_indexes()
         except PyMongoError as e:
             logger.error(f"Failed to connect to MongoDB: {str(e)}")
             raise
@@ -201,26 +207,6 @@ class MongoDatabase:
             raise
 
     # Call operations
-    def create_call(self, call_data: Dict[str, Any]) -> str:
-        """
-        Create a new call record
-
-        Args:
-            call_data: Call data dictionary
-
-        Returns:
-            Call ID
-        """
-        try:
-            call_data["created_at"] = datetime.utcnow()
-            call_data["updated_at"] = datetime.utcnow()
-            result = self.db.calls.insert_one(call_data)
-            logger.info(f"Call created: {result.inserted_id}")
-            return str(result.inserted_id)
-        except Exception as e:
-            logger.error(f"Failed to create call: {str(e)}")
-            raise
-
     def get_call(self, call_id: str) -> Optional[Dict[str, Any]]:
         """
         Get call by ID
@@ -252,7 +238,7 @@ class MongoDatabase:
             Call document or None
         """
         try:
-            call = self.db.calls.find_one({"twilio_sid": twilio_sid})
+            call = self.db.calls.find_one({"call_sid": twilio_sid})
             if call:
                 call["id"] = str(call["_id"])
                 del call["_id"]
@@ -444,3 +430,133 @@ class MongoDatabase:
         except Exception as e:
             logger.error(f"Failed to list recordings for call {call_id}: {str(e)}")
             raise
+
+    # Track-1 specific methods
+    def ensure_track1_indexes(self) -> None:
+        """Indexes required by Track-1 spec (idempotent)."""
+        self.db.users.create_index([("external_id", ASCENDING)], unique=True, name="uniq_external_id")
+        self.db.users.create_index([("phone", ASCENDING)], name="idx_phone")
+        self.db.calls.create_index([("call_sid", ASCENDING)], unique=True, name="uniq_call_sid")
+        self.db.calls.create_index([("user_id", ASCENDING), ("started_at", ASCENDING)],
+                                name="idx_user_started_at")
+        self.db.transcripts.create_index([("call_sid", ASCENDING)], name="idx_call_sid")
+
+    def upsert_user(self, external_id: str, phone: str, name: Optional[str] = None) -> Dict[str, Any]:
+        """Create/update user by external_id; also store phone."""
+        payload: Dict[str, Any] = {"external_id": external_id, "phone": phone, "updated_at": datetime.utcnow()}
+        if name:
+            payload["name"] = name
+        self.db.users.update_one({"external_id": external_id},
+                                {"$set": payload, "$setOnInsert": {"created_at": datetime.utcnow()}},
+                                upsert=True)
+        doc = self.db.users.find_one({"external_id": external_id})
+        if doc:
+            doc["id"] = str(doc["_id"]); del doc["_id"]
+        return doc
+
+    def create_call(self, user_id: str, call_sid: str, started_at: datetime) -> str:
+        """Create call with required fields; unique on call_sid."""
+        existing = self.db.calls.find_one({"call_sid": call_sid})
+        if existing:
+            return str(existing["_id"])
+        doc = {
+            "user_id": user_id,           
+            "call_sid": call_sid,
+            "started_at": started_at,
+            "status": "in-progress",
+            "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow(),
+        }
+        doc.setdefault("twilio_sid", call_sid)
+        res = self.db.calls.insert_one(doc)
+        return str(res.inserted_id)
+
+    def update_call_status(self,
+                        call_sid: str,
+                        status: Optional[str] = None,
+                        duration_sec: Optional[int] = None,
+                        ended_at: Optional[datetime] = None,
+                        meta: Optional[Dict[str, Any]] = None) -> bool:
+        """Update call by call_sid."""
+        update: Dict[str, Any] = {"updated_at": datetime.utcnow()}
+        if status is not None: update["status"] = status
+        if duration_sec is not None: update["duration_sec"] = duration_sec
+        if ended_at is not None: update["ended_at"] = ended_at
+        if meta is not None: update["meta"] = meta
+        r = self.db.calls.update_one({"call_sid": call_sid}, {"$set": update}, upsert=True)
+        return bool(r.matched_count or r.upserted_id)
+
+    def save_recording(self, call_sid: str, recording_url: str, transcription_text: Optional[str] = None) -> bool:
+        """Store recording URL + optional transcription on the call doc."""
+        r = self.db.calls.update_one(
+            {"call_sid": call_sid},
+            {"$set": {
+                "recording_url": recording_url,
+                "transcription_text": transcription_text,
+                "recording_saved_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow(),
+            }},
+            upsert=True
+        )
+        return bool(r.matched_count or r.upserted_id)
+
+    def save_transcript(self, call_sid: str, speaker: str, text: str, ts: datetime) -> str:
+        """Append one transcript row."""
+        doc = {"call_sid": call_sid, "speaker": speaker, "text": text, "ts": ts, "created_at": datetime.utcnow()}
+        res = self.db.transcripts.insert_one(doc)
+        return str(res.inserted_id)
+
+    # Feedback operations
+    def save_feedback(self, call_sid: str, feedback_data: Dict[str, Any]) -> bool:
+        """
+        Save call feedback to the calls collection
+
+        Args:
+            call_sid: Twilio Call SID
+            feedback_data: Feedback data with scoring fields
+
+        Returns:
+            True if successful
+        """
+        try:
+            feedback = {
+                "call_quality": feedback_data.get("call_quality"),
+                "agent_helpfulness": feedback_data.get("agent_helpfulness"),
+                "resolution": feedback_data.get("resolution"),
+                "call_ease": feedback_data.get("call_ease"),
+                "overall_satisfaction": feedback_data.get("overall_satisfaction"),
+                "notes": feedback_data.get("notes"),
+                "feedback_provided_at": datetime.utcnow(),
+            }
+
+            result = self.db.calls.update_one(
+                {"call_sid": call_sid},
+                {"$set": {"feedback": feedback, "updated_at": datetime.utcnow()}},
+                upsert=False
+            )
+            return result.matched_count > 0
+        except Exception as e:
+            logger.error(f"Failed to save feedback for call {call_sid}: {str(e)}")
+            raise
+
+    def get_call_feedback(self, call_sid: str) -> Optional[Dict[str, Any]]:
+        """
+        Get feedback for a specific call
+
+        Args:
+            call_sid: Twilio Call SID
+
+        Returns:
+            Feedback data or None
+        """
+        try:
+            call = self.db.calls.find_one({"call_sid": call_sid})
+            if call and "feedback" in call:
+                feedback = call["feedback"]
+                feedback["call_sid"] = call_sid
+                feedback["created_at"] = feedback.get("feedback_provided_at", datetime.utcnow())
+                return feedback
+            return None
+        except Exception as e:
+            logger.error(f"Failed to get feedback for call {call_sid}: {str(e)}")
+            return None
