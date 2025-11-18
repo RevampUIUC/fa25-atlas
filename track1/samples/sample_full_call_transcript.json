@@ -1,0 +1,118 @@
+{
+  "version": "1.0",
+  "schema": "transcript_export/v1",
+  "call": {
+    "call_sid": "CA1234567890abcdef1234567890abcdef",
+    "user_id": "507f191e810c19729de860ea",
+    "user_name": "John Doe",
+    "user_phone": "+15551234567",
+    "started_at": "2025-01-10T14:20:00.000Z",
+    "ended_at": "2025-01-10T14:25:30.000Z",
+    "duration_sec": 330,
+    "status": "completed"
+  },
+  "metadata": {
+    "provider": "deepgram",
+    "model": "nova-2",
+    "language": "en-US",
+    "total_utterances": 12,
+    "total_words": 145,
+    "average_confidence": 0.96,
+    "languages": ["en-US"],
+    "speakers": ["system", "caller", "agent"]
+  },
+  "transcripts": [
+    {
+      "speaker": "system",
+      "text": "This call may be recorded for quality assurance and training purposes. By remaining on the line, you consent to this recording. If you do not consent, please hang up now.",
+      "ts": "2025-01-10T14:20:05.000Z",
+      "confidence": 0.99,
+      "offset": 5.0
+    },
+    {
+      "speaker": "system",
+      "text": "Thank you for answering. Please leave a message after the beep.",
+      "ts": "2025-01-10T14:20:18.000Z",
+      "confidence": 0.99,
+      "offset": 18.0
+    },
+    {
+      "speaker": "caller",
+      "text": "Hello, I need help with my account.",
+      "ts": "2025-01-10T14:20:22.000Z",
+      "confidence": 0.98,
+      "offset": 22.0
+    },
+    {
+      "speaker": "caller",
+      "text": "I've been trying to reset my password but I keep getting an error message.",
+      "ts": "2025-01-10T14:20:28.000Z",
+      "confidence": 0.97,
+      "offset": 28.0
+    },
+    {
+      "speaker": "caller",
+      "text": "The error says my email address is not recognized.",
+      "ts": "2025-01-10T14:20:35.000Z",
+      "confidence": 0.96,
+      "offset": 35.0
+    },
+    {
+      "speaker": "caller",
+      "text": "My email is john.doe@example.com.",
+      "ts": "2025-01-10T14:20:40.000Z",
+      "confidence": 0.95,
+      "offset": 40.0
+    },
+    {
+      "speaker": "caller",
+      "text": "I signed up about three months ago.",
+      "ts": "2025-01-10T14:20:45.000Z",
+      "confidence": 0.97,
+      "offset": 45.0
+    },
+    {
+      "speaker": "caller",
+      "text": "And I was able to log in fine until last week.",
+      "ts": "2025-01-10T14:20:50.000Z",
+      "confidence": 0.98,
+      "offset": 50.0
+    },
+    {
+      "speaker": "caller",
+      "text": "I've checked my spam folder and I'm not receiving the password reset emails either.",
+      "ts": "2025-01-10T14:20:57.000Z",
+      "confidence": 0.96,
+      "offset": 57.0
+    },
+    {
+      "speaker": "caller",
+      "text": "Can someone please call me back at this number to help resolve this issue?",
+      "ts": "2025-01-10T14:21:05.000Z",
+      "confidence": 0.97,
+      "offset": 65.0
+    },
+    {
+      "speaker": "caller",
+      "text": "My account number is 1234567890 if that helps.",
+      "ts": "2025-01-10T14:21:12.000Z",
+      "confidence": 0.95,
+      "offset": 72.0
+    },
+    {
+      "speaker": "caller",
+      "text": "Thank you for your help. I look forward to hearing from you soon.",
+      "ts": "2025-01-10T14:21:18.000Z",
+      "confidence": 0.98,
+      "offset": 78.0
+    }
+  ],
+  "summary": {
+    "topics": ["account", "password reset", "email", "technical support"],
+    "intent": "technical_support",
+    "sentiment": "neutral",
+    "urgency": "medium",
+    "requires_callback": true
+  },
+  "exported_at": "2025-01-10T15:00:00.000Z"
+}
