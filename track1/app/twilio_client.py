@@ -280,39 +280,22 @@ class TwilioClient:
         script: Optional[str] = None,
         record_call: bool = True,
         enable_streaming: bool = True,
-<<<<<<< HEAD
-    ) -> str:
-        """
-        Generate TwiML response for voice calls with consent message
-=======
         call_id: str = None,
     ) -> str:
         """
         Generate TwiML response for voice calls with media streaming (Week 3)
->>>>>>> eee2df5dce74226cdfba8c75cdad18e53625f15a
 
         Args:
             script: Text to speak (speech synthesis)
             record_call: Whether to record the call
-<<<<<<< HEAD
-            enable_streaming: Whether to enable real-time audio streaming (default: True)
-=======
             enable_streaming: Enable real-time media streaming for transcription
             call_id: Call ID for streaming identification
->>>>>>> eee2df5dce74226cdfba8c75cdad18e53625f15a
 
         Returns:
             TwiML response as string
         """
         response = VoiceResponse()
 
-<<<<<<< HEAD
-        # Start media stream for real-time transcription if enabled
-        if enable_streaming:
-            # Use wss:// for secure WebSocket (or ws:// for development)
-            stream_url = f"{self.base_url.replace('http://', 'ws://').replace('https://', 'wss://')}/twilio/stream"
-            response.start().stream(url=stream_url)
-=======
         # Week 3: Start media streaming for real-time transcription
         if enable_streaming and call_id:
             # Determine WebSocket URL based on base_url protocol
@@ -327,7 +310,6 @@ class TwilioClient:
             response.append(connect)
             
             logger.info(f"Media streaming enabled for call {call_id} at {stream_url}")
->>>>>>> eee2df5dce74226cdfba8c75cdad18e53625f15a
 
         # Client-approved consent message
         consent_message = (
@@ -424,8 +406,5 @@ class TwilioClient:
             raise
         except Exception as e:
             logger.error(f"Failed to hangup call {call_sid}: {str(e)}")
-<<<<<<< HEAD
             self._handle_twilio_exception(e)
-=======
             raise
->>>>>>> eee2df5dce74226cdfba8c75cdad18e53625f15a
