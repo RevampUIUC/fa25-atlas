@@ -433,11 +433,7 @@ class MongoDatabase:
             logger.error(f"Failed to list recordings for call {call_id}: {str(e)}")
             raise
 
-<<<<<<< HEAD
-#starting from here
-=======
     # Track-1 specific methods
->>>>>>> eee2df5dce74226cdfba8c75cdad18e53625f15a
     def ensure_track1_indexes(self) -> None:
         """Indexes required by Track-1 spec (idempotent)."""
         self.db.users.create_index([("external_id", ASCENDING)], unique=True, name="uniq_external_id")
@@ -447,10 +443,6 @@ class MongoDatabase:
                                 name="idx_user_started_at")
         self.db.transcripts.create_index([("call_sid", ASCENDING)], name="idx_call_sid")
 
-<<<<<<< HEAD
-
-=======
->>>>>>> eee2df5dce74226cdfba8c75cdad18e53625f15a
     def upsert_user(self, external_id: str, phone: str, name: Optional[str] = None) -> Dict[str, Any]:
         """Create/update user by external_id; also store phone."""
         payload: Dict[str, Any] = {"external_id": external_id, "phone": phone, "updated_at": datetime.utcnow()}
@@ -464,21 +456,26 @@ class MongoDatabase:
             doc["id"] = str(doc["_id"]); del doc["_id"]
         return doc
 
-    def create_call(self, user_id: str, call_sid: str, started_at: datetime) -> str:
-        """Create call with required fields; unique on call_sid."""
-        existing = self.db.calls.find_one({"call_sid": call_sid})
-        if existing:
-            return str(existing["_id"])
-        doc = {
-            "user_id": user_id,           
-            "call_sid": call_sid,
-            "started_at": started_at,
-            "status": "in-progress",
-            "created_at": datetime.utcnow(),
-            "updated_at": datetime.utcnow(),
-        }
-        doc.setdefault("twilio_sid", call_sid)
-        res = self.db.calls.insert_one(doc)
+    def create_call(self, call_doc: dict) -> str:
+        """Create call with provided document; unique on call_sid."""
+        # Check if call already exists
+        call_sid = call_doc.get("call_sid")
+        if call_sid:
+            existing = self.db.calls.find_one({"call_sid": call_sid})
+            if existing:
+                return str(existing["_id"])
+
+        # Ensure required timestamps
+        if "created_at" not in call_doc:
+            call_doc["created_at"] = datetime.utcnow()
+        if "updated_at" not in call_doc:
+            call_doc["updated_at"] = datetime.utcnow()
+
+        # Ensure twilio_sid defaults to call_sid
+        if "twilio_sid" not in call_doc and call_sid:
+            call_doc["twilio_sid"] = call_sid
+
+        res = self.db.calls.insert_one(call_doc)
         return str(res.inserted_id)
 
     def update_call_status(self,
@@ -516,7 +513,6 @@ class MongoDatabase:
         res = self.db.transcripts.insert_one(doc)
         return str(res.inserted_id)
 
-<<<<<<< HEAD
     def init_retry_plan(self, twilio_sid: str, retry_limit: int, retry_delay_sec: int) -> bool:
         """
         Ensure call doc has retry fields initialized.
@@ -551,7 +547,6 @@ class MongoDatabase:
             logger.error(f"init_retry_plan failed for {twilio_sid}: {e}")
             return False
 
-
     def log_call_attempt(
         self,
         twilio_sid: str,
@@ -581,7 +576,6 @@ class MongoDatabase:
             logger.error(f"log_call_attempt failed for {twilio_sid}: {e}")
             return False
 
-
     def get_call_attempts(self, twilio_sid: str) -> List[Dict[str, Any]]:
         """
         Return attempts[] for a call (sorted by attempt_no).
@@ -596,7 +590,7 @@ class MongoDatabase:
         except Exception as e:
             logger.error(f"get_call_attempts failed for {twilio_sid}: {e}")
             return []
-=======
+
     # Feedback operations
     def save_feedback(self, call_sid: str, feedback_data: Dict[str, Any]) -> bool:
         """
@@ -651,4 +645,3 @@ class MongoDatabase:
         except Exception as e:
             logger.error(f"Failed to get feedback for call {call_sid}: {str(e)}")
             return None
->>>>>>> eee2df5dce74226cdfba8c75cdad18e53625f15a

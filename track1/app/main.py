@@ -258,42 +258,42 @@ async def create_outbound_call(call_request: OutboundCallRequest):
         500: Internal server error
     """
     try:
-        logger.info(f"Creating outbound call to {request.to}")
-        
+        logger.info(f"Creating outbound call to {call_request.to}")
+
         # Generate unique call_id
         call_id = str(uuid.uuid4())
-        
+
         # Try real Twilio, fallback to mock for testing
         try:
             twilio_response = twilio_client.make_outbound_call(
-                to_number=request.to,
+                to_number=call_request.to,
                 call_id=call_id,
-                script=request.script,
-                recording_enabled=request.recording_enabled,
+                script=call_request.script,
+                recording_enabled=call_request.recording_enabled,
             )
             call_sid = twilio_response["call_sid"]
             logger.info(f"Real Twilio call created: {call_sid}")
-            
+
         except Exception as twilio_error:
             # Use mock SID if Twilio fails (for testing without verified numbers)
             logger.warning(f"Twilio call failed, using mock SID for testing: {str(twilio_error)}")
             call_sid = f"CA{uuid.uuid4().hex[:32]}"
             logger.info(f"Mock call created: {call_sid}")
-        
+
         # Create call document with retry tracking
         call_doc = {
             "call_id": call_id,
-            "user_id": request.user_external_id,
-            "user_external_id": request.user_external_id,
-            "to_number": request.to,
+            "user_id": call_request.user_external_id,
+            "user_external_id": call_request.user_external_id,
+            "to_number": call_request.to,
             "from_number": twilio_client.from_number if twilio_client else "+15555555555",
             "call_sid": call_sid,
             "twilio_sid": call_sid,
             "status": "initiated",
-            "script": request.script,
-            "recording_enabled": request.recording_enabled,
+            "script": call_request.script,
+            "recording_enabled": call_request.recording_enabled,
             "started_at": datetime.utcnow(),
-            
+
             # RETRY TRACKING FIELDS
             "attempt_count": 1,
             "max_attempts": 3,
@@ -306,16 +306,16 @@ async def create_outbound_call(call_request: OutboundCallRequest):
                 "timestamp": datetime.utcnow(),
                 "error_message": None
             }],
-            
+
             "created_at": datetime.utcnow(),
             "updated_at": datetime.utcnow()
         }
 
-        db_call_id = db.create_call(call_data)
+        db_call_id = db.create_call(call_doc)
         call_record = db.get_call(db_call_id)
         retry_limit = int(os.getenv("RETRY_LIMIT", 3))
         retry_delay = int(os.getenv("RETRY_DELAY", 10))
-        db.init_retry_plan(twilio_response["call_sid"], retry_limit, retry_delay)
+        db.init_retry_plan(call_sid, retry_limit, retry_delay)
 
         return OutboundCallResponse(**call_record)
 
@@ -430,173 +430,6 @@ async def get_call_debug(call_sid: str):
     except Exception as e:
         logger.error(f"Failed to get call debug info: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-
-
-# ============================================================================
-# Call Feedback Endpoints
-# ============================================================================
-
-
-@app.patch("/calls/{call_sid}/feedback", response_model=CallFeedbackResponse)
-async def submit_call_feedback(call_sid: str, feedback: CallFeedbackRequest):
-    """Submit feedback for a call"""
-    try:
-        # Validate call_sid format
-        if not call_sid or not isinstance(call_sid, str) or len(call_sid.strip()) == 0:
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid call_sid: must be a non-empty string"
-            )
-
-        # Verify call exists
-        logger.info(f"Attempting to submit feedback for call: {call_sid}")
-        call = db.get_call_by_twilio_sid(call_sid)
-        if not call:
-            logger.warning(f"Call not found: {call_sid}")
-            raise HTTPException(status_code=404, detail=f"Call not found: {call_sid}")
-
-        # Validate feedback data
-        feedback_data = feedback.dict()
-
-        # Additional validation for scores
-        scores = {
-            "call_quality": feedback_data.get("call_quality"),
-            "agent_helpfulness": feedback_data.get("agent_helpfulness"),
-            "resolution": feedback_data.get("resolution"),
-            "call_ease": feedback_data.get("call_ease"),
-            "overall_satisfaction": feedback_data.get("overall_satisfaction"),
-        }
-
-        for field_name, score in scores.items():
-            if score is None or not isinstance(score, int) or score < 1 or score > 5:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid {field_name}: must be an integer between 1 and 5"
-                )
-
-        # Validate notes if provided
-        notes = feedback_data.get("notes")
-        if notes is not None:
-            if not isinstance(notes, str):
-                raise HTTPException(
-                    status_code=400,
-                    detail="Invalid notes: must be a string"
-                )
-            if len(notes) > 2000:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Invalid notes: must not exceed 2000 characters"
-                )
-
-        # Save feedback to database
-        logger.info(f"Saving feedback for call: {call_sid}")
-        try:
-            success = db.save_feedback(call_sid=call_sid, feedback_data=feedback_data)
-        except Exception as db_error:
-            logger.error(f"Database error while saving feedback: {str(db_error)}")
-            raise HTTPException(
-                status_code=500,
-                detail="Database error: failed to save feedback"
-            )
-
-        if not success:
-            logger.error(f"Failed to save feedback for call: {call_sid}")
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to save feedback: call update returned no match"
-            )
-
-        # Retrieve and return saved feedback
-        try:
-            saved_feedback = db.get_call_feedback(call_sid)
-        except Exception as db_error:
-            logger.error(f"Database error while retrieving feedback: {str(db_error)}")
-            raise HTTPException(
-                status_code=500,
-                detail="Database error: feedback saved but could not be retrieved"
-            )
-
-        if not saved_feedback:
-            logger.error(f"Feedback not found after save for call: {call_sid}")
-            raise HTTPException(
-                status_code=500,
-                detail="Feedback saved but could not be retrieved"
-            )
-
-        logger.info(f"Feedback successfully submitted for call: {call_sid}")
-        return CallFeedbackResponse(**saved_feedback)
-
-    except HTTPException:
-        raise
-    except ValueError as val_error:
-        logger.error(f"Validation error: {str(val_error)}")
-        raise HTTPException(status_code=400, detail=f"Validation error: {str(val_error)}")
-    except Exception as e:
-        logger.error(f"Unexpected error while submitting feedback for call {call_sid}: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail="Internal server error: unexpected error occurred"
-        )
-
-
-@app.get("/calls/{call_sid}/feedback", response_model=CallFeedbackResponse)
-async def get_call_feedback(call_sid: str):
-    """Get feedback for a specific call"""
-    try:
-        # Validate call_sid format
-        if not call_sid or not isinstance(call_sid, str) or len(call_sid.strip()) == 0:
-            logger.warning("Invalid call_sid provided for feedback retrieval")
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid call_sid: must be a non-empty string"
-            )
-
-        # Verify call exists
-        logger.info(f"Attempting to retrieve feedback for call: {call_sid}")
-        try:
-            call = db.get_call_by_twilio_sid(call_sid)
-        except Exception as db_error:
-            logger.error(f"Database error while looking up call: {str(db_error)}")
-            raise HTTPException(
-                status_code=500,
-                detail="Database error: failed to look up call"
-            )
-
-        if not call:
-            logger.warning(f"Call not found: {call_sid}")
-            raise HTTPException(status_code=404, detail=f"Call not found: {call_sid}")
-
-        # Get feedback
-        try:
-            feedback = db.get_call_feedback(call_sid)
-        except Exception as db_error:
-            logger.error(f"Database error while retrieving feedback: {str(db_error)}")
-            raise HTTPException(
-                status_code=500,
-                detail="Database error: failed to retrieve feedback"
-            )
-
-        if not feedback:
-            logger.info(f"No feedback found for call: {call_sid}")
-            raise HTTPException(
-                status_code=404,
-                detail=f"No feedback found for call: {call_sid}"
-            )
-
-        logger.info(f"Feedback successfully retrieved for call: {call_sid}")
-        return CallFeedbackResponse(**feedback)
-
-    except HTTPException:
-        raise
-    except ValueError as val_error:
-        logger.error(f"Validation error: {str(val_error)}")
-        raise HTTPException(status_code=400, detail=f"Validation error: {str(val_error)}")
-    except Exception as e:
-        logger.error(f"Unexpected error while retrieving feedback for call {call_sid}: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail="Internal server error: unexpected error occurred"
-        )
 
 
 # ============================================================================
@@ -982,16 +815,16 @@ async def retry_call_background(call_sid: str, max_attempts: int = 3):
 @app.post("/twilio/status")
 async def handle_status_callback(
     background_tasks: BackgroundTasks,
-    CallSid: str,
-    CallStatus: str,
-    To: str,
-    From: str,
-    Direction: str = None,
-    ApiVersion: str = None,
-    AccountSid: str = None,
-    Timestamp: str = None,
-    CallDuration: Optional[int] = None,
-    AnsweredBy: str = None,  # AMD result: human, machine_start, machine_end_beep, etc.
+    CallSid: str = Form(...),
+    CallStatus: str = Form(...),
+    To: str = Form(None),
+    From: str = Form(None),
+    Direction: str = Form(None),
+    ApiVersion: str = Form(None),
+    AccountSid: str = Form(None),
+    Timestamp: str = Form(None),
+    CallDuration: Optional[str] = Form(None),
+    AnsweredBy: str = Form(None),  # AMD result: human, machine_start, machine_end_beep, etc.
 ):
     """
     Handle call status updates from Twilio
@@ -999,12 +832,6 @@ async def handle_status_callback(
     Automatically enqueues retry tasks for failed calls
     Captures answeredBy parameter for voicemail detection
     """
-async def twilio_status_callback(
-    CallSid: str = Form(...),
-    CallStatus: str = Form(...),
-    CallDuration: Optional[str] = Form(None),
-):
-    """Handle Twilio status callbacks with retry logic and no-answer detection"""
     try:
         logger.info(f"Received status update: CallSid={CallSid}, Status={CallStatus}, AnsweredBy={AnsweredBy}")
 
@@ -1045,7 +872,6 @@ async def twilio_status_callback(
             "attempts": attempts,
             "updated_at": datetime.utcnow()
         }
-<<<<<<< HEAD
 
         if Direction:
             update_data["direction"] = Direction
@@ -1054,13 +880,23 @@ async def twilio_status_callback(
         if AnsweredBy:
             update_data["answered_by"] = AnsweredBy
 
-        db.update_call_by_twilio_sid(CallSid, update_data)
+        # Add duration if provided
+        if CallDuration:
+            update_data["duration_sec"] = int(CallDuration)
+
         # NEW: also set duration/ended_at via Track-1 contract
         ended_at = (
             datetime.utcnow()
             if CallStatus in ("completed", "failed", "busy", "no-answer")
             else None
         )
+
+        # WEEK 3: NO-ANSWER DETECTION ENHANCEMENT
+        # Detect no-answer scenario (ringing but not picked up)
+        if CallStatus == "no-answer":
+            update_data["no_answer_detected"] = True
+            update_data["no_answer_detected_at"] = datetime.utcnow()
+            logger.info(f"No-answer detected for call {CallSid}")
 
         # Derive next attempt number from current count
         call_doc = db.get_call_by_twilio_sid(CallSid) or {}
@@ -1077,7 +913,7 @@ async def twilio_status_callback(
             reason=reason,
         )
 
-        # this won’t break anything; it upserts by call_sid if needed
+        # this won't break anything; it upserts by call_sid if needed
         db.update_call_status(
             call_sid=CallSid,
             status=status,
@@ -1092,55 +928,32 @@ async def twilio_status_callback(
 
         logger.info(f"Call {CallSid} status updated to {status}")
 
-        # Enqueue background retry task for failed calls
-        retry_statuses = ["failed", "no-answer", "busy"]
-        if status in retry_statuses:
-            logger.info(f"Enqueuing background retry task for call {CallSid} with status {status}")
-            background_tasks.add_task(retry_call_background, CallSid, 3)
-
-<<<<<<< HEAD
-        # Enqueue voicemail detection for completed calls
-        if CallStatus == "completed" and AnsweredBy:
-            logger.info(f"Enqueuing voicemail detection for call {CallSid}")
-            background_tasks.add_task(run_voicemail_detection, CallSid, AnsweredBy, CallDuration)
-
-=======
-=======
-        
-        # Add duration if provided
-        if CallDuration:
-            update_data["duration_sec"] = int(CallDuration)
-        
-        # WEEK 3: NO-ANSWER DETECTION ENHANCEMENT
-        # Detect no-answer scenario (ringing but not picked up)
-        if CallStatus == "no-answer":
-            update_data["no_answer_detected"] = True
-            update_data["no_answer_detected_at"] = datetime.utcnow()
-            logger.info(f"No-answer detected for call {CallSid}")
-        
         # RETRY LOGIC
         retry_statuses = ["busy", "no-answer", "failed"]
         attempt_count = call.get("attempt_count", 1)
         max_attempts = call.get("max_attempts", 3)
         can_retry = attempt_count < max_attempts
-        
+
         if CallStatus in retry_statuses and can_retry:
             # Schedule retry with exponential backoff
             retry_delays = [2, 5, 10]  # minutes
             delay_index = attempt_count - 1
             delay_minutes = retry_delays[delay_index] if delay_index < len(retry_delays) else 10
-            
+
             next_retry = datetime.utcnow() + timedelta(minutes=delay_minutes)
-            
+
             update_data["should_retry"] = True
             update_data["next_retry_at"] = next_retry
-            
+
             logger.info(f"Scheduling retry for {CallSid} in {delay_minutes} minutes (attempt {attempt_count + 1}/{max_attempts})")
+
+            # Enqueue background retry task for failed calls
+            background_tasks.add_task(retry_call_background, CallSid, 3)
         else:
             # No more retries
             update_data["should_retry"] = False
             update_data["next_retry_at"] = None
-            
+
             if CallStatus == "completed":
                 logger.info(f"Call {CallSid} completed successfully on attempt {attempt_count}")
             elif not can_retry:
@@ -1148,15 +961,20 @@ async def twilio_status_callback(
                 # WEEK 3: Flag calls that maxed out without completing
                 if CallStatus in ["no-answer", "busy"]:
                     update_data["max_retries_reached_no_answer"] = True
-        
+
         # Update call in database using call_sid
         db.db.calls.update_one(
             {"call_sid": CallSid},
             {"$set": update_data}
         )
-        
+
+        # Enqueue voicemail detection for completed calls
+        if CallStatus == "completed" and AnsweredBy:
+            logger.info(f"Enqueuing voicemail detection for call {CallSid}")
+            background_tasks.add_task(run_voicemail_detection, CallSid, AnsweredBy, CallDuration)
+
         return {"status": "ok"}
-        
+
     except Exception as e:
         logger.error(f"Error in status callback: {str(e)}")
         return {"status": "ok"}
@@ -1164,15 +982,6 @@ async def twilio_status_callback(
 
 @app.post("/twilio/recording")
 async def handle_recording_callback(
-<<<<<<< HEAD
-    RecordingSid: str,
-    RecordingUrl: str,
-    RecordingStatus: str,
-    CallSid: str,
-    AccountSid: str = None,
-    ApiVersion: str = None,
-    TranscriptionText: Optional[str] = None,
-=======
     RecordingSid: str = Form(...),
     RecordingUrl: str = Form(...),
     RecordingStatus: str = Form(...),
@@ -1180,7 +989,6 @@ async def handle_recording_callback(
     AccountSid: str = Form(None),
     ApiVersion: str = Form(None),
     TranscriptionText: Optional[str] = Form(None),
->>>>>>> eee2df5dce74226cdfba8c75cdad18e53625f15a
 ):
     """Handle recording completion webhooks from Twilio"""
     try:
@@ -1662,7 +1470,6 @@ async def retry_failed_calls(retry_request: CallRetryRequest):
 # ============================================================================
 
 
-<<<<<<< HEAD
 @app.exception_handler(TwilioValidationError)
 async def twilio_validation_error_handler(request: Request, exc: TwilioValidationError):
     """Handle Twilio validation errors (invalid phone numbers, etc.)"""
@@ -1753,9 +1560,6 @@ async def twilio_error_handler(request: Request, exc: TwilioError):
         }
     )
 
-=======
-from fastapi.responses import JSONResponse
->>>>>>> eee2df5dce74226cdfba8c75cdad18e53625f15a
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request, exc):
